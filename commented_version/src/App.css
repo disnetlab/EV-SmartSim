@@ -1,0 +1,89 @@
+@import "leaflet/dist/leaflet.css";
+
+
+.App {
+  display: flex;
+}
+
+.sidebar_gauche {
+  width: 180px;
+  background-color: #f0f0f0;
+  padding: 10px;
+}
+
+.sidebar_droite {
+  width: 200px;
+  background-color: #f0f0f0;
+  padding: 10px;
+  overflow-y: auto;
+}
+
+.step-item {
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+
+.controls-section {
+  margin-bottom: 20px;
+  display: block;
+  width: 100%;
+  padding: 1px;
+  color: black;
+  border: none;
+  cursor: pointer;
+}
+
+.add-button, .action-button {
+  display: block;
+  width: 100%;
+  margin-bottom: 20px;
+  padding: 1px;
+  background-color: #007bff;
+  color: white;
+  border: none;
+  cursor: pointer;
+}
+
+.simulation-controls {
+  display: block;
+  width: 100%;
+  margin-bottom: 2000px;
+  padding: 1px;
+  background-color: #007bff;
+  color: white;
+  border: none;
+  cursor: pointer;
+}
+
+.map-container {
+  flex-grow: 1;
+  position: relative;
+}
+
+.map-frame {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  border: 2px solid #007bff;
+  border-radius: 10px;
+  overflow: hidden;
+  height: 700px; /* Adjust height as needed */
+  width: 750px; /* Adjust width as needed */
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+}
+
+.events-container {
+  background-color: #f0f0f0;
+  padding: 50px;
+  max-height: 1200px;
+  overflow-y: auto;
+}
+
+ul {
+  list-style-type: none;
+  padding: 0;
+}
+
+li {
+  margin: 50px 0;
+}

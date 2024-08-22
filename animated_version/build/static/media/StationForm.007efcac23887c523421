@@ -1,0 +1,98 @@
+import React, { useState } from 'react';
+import axios from 'axios';
+
+const VehicleForm = () => {
+  const [vehicleData, setVehicleData] = useState({
+    name: '',
+    battery_capacity: '',
+    consumption: '',
+    init_battery: '',
+    location: '',
+    start_time: '',
+    tripcalc_method: 'simple',
+    charge_method: 'simple',
+  });
+
+  const handleChange = (e) => {
+    setVehicleData({
+      ...vehicleData,
+      [e.target.name]: e.target.value,
+    });
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    axios.post('http://localhost:5000/add_vehicle', vehicleData)
+      .then(response => {
+        console.log(response.data);
+      });
+  };
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <label>
+        Name:
+        <input
+          type="text"
+          name="name"
+          value={vehicleData.name}
+          onChange={handleChange}
+        />
+      </label>
+
+      <label>
+        Battery Capacity:
+        <input
+          type="number"
+          name="battery_capacity"
+          value={vehicleData.battery_capacity}
+          onChange={handleChange}
+        />
+      </label>
+
+      <label>
+        consumption:
+        <input
+          type="number"
+          name="consumption"
+          value={vehicleData.consumption}
+          onChange={handleChange}
+        />
+      </label>
+
+      <label>
+        init_battery:
+        <input
+          type="number"
+          name="init_battery"
+          value={vehicleData.init_battery}
+          onChange={handleChange}
+        />
+      </label>
+
+      <label>
+        location:
+        <input
+          type="number"
+          name="location"
+          value={vehicleData.location}
+          onChange={handleChange}
+        />
+      </label>
+
+      <label>
+        start time:
+        <input
+          type="number"
+          name="start_time"
+          value={vehicleData.start_time}
+          onChange={handleChange}
+        />
+      </label>
+
+      <button type="submit">Add Vehicle data</button>
+    </form>
+  );
+};
+
+export default VehicleForm;

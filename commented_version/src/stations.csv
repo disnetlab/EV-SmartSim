@@ -1,0 +1,4 @@
+type,id,name,location,charging_speed,price_per_kwh,buy_price_per_kwh,discharging_speed
+station,0,Station 0,-37.819&144.97332,150,0.18,0.12,120
+station,1,Station 1,-37.804&144.93332,70,0.14,0.10,40
+station,2,Station 2,-37.809&144.97132,150,0.18,0.12,120

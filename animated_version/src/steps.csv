@@ -1,0 +1,7 @@
+type,id,vehicle_id,stepType,start_time,end_time,start_charge,end_charge,desired_charge,duration,station_id
+steps,0,0,trip,7.30,8.00,,,,,0
+steps,1,0,charge,,,9.30,11.00,2000,,0
+steps,2,1,trip,7.30,8.00,,,,,1
+steps,3,1,charge,,,9.30,11.00,5000,,1
+steps,4,2,trip,6.30,9.00,,,,,2
+steps,5,2,charge,,,9.01,11.00,5000,,2

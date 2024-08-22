@@ -1,0 +1,4 @@
+type,id,name,location,battery_capacity,consumption,battery,start_time
+vehicle,0,Vehicle 0,-37.844&144.96332,2000,35,500,9:00
+vehicle,1,Vehicle 1,-37.744&144.96332,10000,15,5000,8:00
+vehicle,2,Vehicle 2,-37.804&144.92332,13000,20,250,10:00
