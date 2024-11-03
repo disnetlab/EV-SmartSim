@@ -1,7 +1,26 @@
 # Roadmap 
 
-## Use Case 1
-
+## Use Case 1 - Proof of Concept of Waypoint Breakdown
+1. User create dataset by creating steps
+    - Given 1 set of steps with zero element 
+        - User add vehicle
+            - For each vehicle user add step
+                - Set initial position
+                - Select step type
+                    - Init
+                    - Stop with charging discharging
+                        - Use previous latest point location 
+                    - Stop without charging discharging
+                        - Use previous latest point location 
+                    - Trip 
+                        - Show Record Trip Route Buttom
+                        - Click Record
+                        - First waypoint is defined by previous location 
+                        - Start to generate Trip Route by clicking on map 
+                        - Click Stop Record
+                - Input time from
+                - Input time to
+                - Submit step
 ### User Inputs
 - Vehicles
     - Vehicle ID
@@ -36,7 +55,23 @@
         - Shortest path
             - Service
 - Input formats integration
-- Break down all of the vehicle steps into N minute periods 
+- Simulation time break down from the data
+    - Begin simulation time at index = 0
+        - V1
+            - 0 : 12:00 
+            - 1 : 13:00 
+        - V2
+            - 0 : 12:35
+            - 1 : 12:44
+    - Result
+        - 0 : 12:00
+        - 1 : 12:35
+        - 2 : 12:44
+        - 3 : 13:00
+    - Use timeout recursive strategy
+
+
+- Can set interval change interval ?
 
 ### App Outputs
 - Smooth multi vehicle movement animation

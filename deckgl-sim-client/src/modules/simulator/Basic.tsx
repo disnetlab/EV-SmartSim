@@ -3,10 +3,12 @@ import type { TileLayerPickingInfo } from "@deck.gl/geo-layers"
 import { PathStyleExtension } from "@deck.gl/extensions"
 import { useState } from "react";
 import { FaCheckSquare, FaSquare } from "react-icons/fa";
+import { Dayjs } from "dayjs";
+import { FaCheck, FaPlus } from "react-icons/fa6";
 
 const tailwindStyles = {
   button: {
-    basic: `flex flex-row py-1 px-2 gap-2 bg-slate-200 rounded items-center text-xs`,
+    basic: `flex flex-row py-1 px-2 gap-2 bg-slate-200 hover:bg-slate-300 rounded items-center text-xs`,
   },
 }
 
@@ -36,19 +38,24 @@ const LINK_STYLE: React.CSSProperties = {
   cursor: 'grab'
 }
 
+interface VehicleStep {
+  type: "trip" | "stop" | "cdc"
+  destination: {
+    position: Position 
+    time: Dayjs
+  }
+  routeInBetween: Position[]
+}
+
+interface Vehicle {
+  id: number,
+  initialPosition: [longitude: number, latitude: number]
+  steps: VehicleStep[]
+  heading: number
+}
 
 /* global window */
 const devicePixelRatio = (typeof window !== 'undefined' && window.devicePixelRatio) || 1
-
-const TopNavigation = () => {
-  return (
-    <div className="flex flex-row fixed top-0 w-full bg-white p-2">
-      <button>
-        
-      </button>
-    </div>
-  )
-}
 
 const SimulatorBasic = ({
   showBorder = false,
@@ -65,33 +72,63 @@ const SimulatorBasic = ({
     datasetImporter: true,
   })
 
-  const [drawing, setDrawing] = useState(false) // Track drawing mode
-  const [pathPoints, setPathPoints] = useState<Position[][]>([]) // Store path points
+  const resetDrawing = {
+    vehicleRoute: false,
+    vehicleInitPosition: false, 
+  }
+  const [drawing, setDrawing] = useState(resetDrawing) // Track drawing mode
+  const [tempPathPoints, setTempPathPoints] = useState<Position[]>([]) // Store temporary path points for drawing
 
   const [heading, setHeading] = useState<number>(0)
   const [carPosition, setCarPosition] = useState<number[]>(CLAYTON_COORDINATES)
 
+  const [vehicles, setVehicles] = useState<Vehicle[]>([
+    {
+      id: 1,
+      initialPosition: [CLAYTON_COORDINATES[0], CLAYTON_COORDINATES[1]], 
+      steps: [],
+      heading: 0,
+    }
+  ])
+
+  const addVehicle = (initialPosition: [longitude: number, latitude: number]) => {
+    setVehicles(v => {
+      const output = ([
+        ...v,
+        {
+          id: vehicles.length + 1,
+          initialPosition: initialPosition,
+          steps: [],
+          heading: 0,
+        }
+      ])
+
+      setDrawing(resetDrawing)
+
+      return output
+    })
+  }
+
+  const addVehicleSteps = () => {
+
+    setDrawing(resetDrawing)
+
+  } 
+
   const handleMapClick = (event: any) => {
     if (!drawing) return
     const { coordinate } = event
-    setCarPosition([coordinate[0], coordinate[1]])
-    setPathPoints(current => [...current, coordinate])
 
-    console.log("pathPoints now", pathPoints)
+    if (drawing.vehicleRoute) {
+      setTempPathPoints(current => [...current, coordinate])
+    }
+
+    if (drawing.vehicleInitPosition) {
+      addVehicle(coordinate)
+    }
+
+    console.log("pathPoints now", tempPathPoints)
   }
-
-  // Path layer for drawing the route
-  const pathLayer = new PathLayer({
-    id: 'drawn-path-layer',
-    data: pathPoints,
-    getPath: d => d,
-    getColor: [255, 0, 0],
-    extensions: [new PathStyleExtension({ dash: true })],
-    getDashArray: [4, 2],
-    lineWidthUnits: "pixels",
-    widthMinPixels: 2,
-    getLineWidth: 4,
-  })
 
   const tileLayer = new TileLayer<ImageBitmap>({
     // https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames#Tile_servers
@@ -204,16 +241,16 @@ const SimulatorBasic = ({
         return width
       },
     }),
-    new IconLayer({
+    new IconLayer<Vehicle>({
       id: 'car-layer',
-      data: [{ position: carPosition, heading }],
+      data: vehicles,
       getIcon: d => ({
         url: '/car-icon.png',
         width: 1157/5,
         height: 486/5,
         anchorY: 64  // Adjust based on your icon
       }),
-      getPosition: d => d.position,
+      getPosition: d => d.steps.length === 0 ? d.initialPosition : d.steps[d.steps.length - 1].destination.position,
       getSize: 20,  // Adjust size as needed
       getAngle: d => d.heading - 0 + 180,  // Subtract 90 to align icon properly
       sizeScale: 1,
@@ -224,20 +261,20 @@ const SimulatorBasic = ({
       data: [
         {
           vehicleID: 1,
-          path: pathPoints, 
+          path: tempPathPoints, 
         } 
       ],
       getPath: d => d.path,
       getColor: [255, 0, 0],
-      lineWidthUnits: "meter",
-      widthMinPixels: 10,
-      getLineWidth: 10,
+      lineWidthUnits: "pixels",
+      widthMinPixels: 4,
+      getLineWidth: 4,
     }),
   ]
 
   return (
     <div className="w-full min-h-screen relative bg-slate-900">
-      <div className="flex flex-row fixed top-0 w-full bg-white p-2 text-sm items-center gap-2 shadow z-30">
+      <div className={`flex flex-row fixed w-full bg-white p-2 text-sm transition-all items-center gap-2 shadow z-30 ${(drawing.vehicleRoute || drawing.vehicleInitPosition) ? '-top-20' : 'top-0 '}`}>
         <h1 className="font-semibold mr-2">EV-SmartSim</h1>
         <button
           onClick={() => setShow(v => ({...v, vectorBgMap: !v.vectorBgMap}))}
@@ -259,15 +296,63 @@ const SimulatorBasic = ({
         </button>
       </div>
 
-      <div className={`flex flex-col gap-2 fixed h-screen bg-white p-4 transition-all w-[20rem] ${show.datasetGenerator ? '' : '-ml-[20rem]'} shadow z-20 pt-12`}>
+      <div className={`fixed w-full bg-white flex flex-row gap-2 z-20 justify-center transition-all p-4 ${(drawing.vehicleRoute || drawing.vehicleInitPosition) ? 'top-0' : '-top-20'}`}>
+        {drawing.vehicleRoute && <h3>Draw Vehicle Routes for This Step</h3>} 
+        {drawing.vehicleInitPosition && <h3>Click on the map to place vehicle initial position</h3>} 
+        {drawing.vehicleRoute &&
+          <button
+            onClick={() => {
+              addVehicleSteps()
+            }}
+            className={`${tailwindStyles.button.basic}`}
+          >
+            <FaCheck /> Save Step
+          </button>
+        }
+      </div>
+
+      <div className={`flex flex-col gap-2 fixed h-screen bg-white p-4 transition-all w-[20rem] ${show.datasetGenerator && (!drawing.vehicleRoute && !drawing.vehicleInitPosition) ? '' : '-ml-[20rem]'} shadow z-20 pt-12`}>
         <h1 className="font-semibold">Dataset Generator</h1>
 
         <button
-          onClick={() => setDrawing(v => !v)}
+          onClick={() => setDrawing(v => ({
+            ...v,
+            vehicleRoute: !v.vehicleRoute,
+          }))}
           className={`${tailwindStyles.button.basic}`}
         >
-          {drawing ? <FaCheckSquare /> : <FaSquare />} Draw route
+          {drawing.vehicleRoute ? <FaCheckSquare /> : <FaSquare />} Draw route
         </button>
+
+        <div className="flex flex-row justify-between">
+          <h2 className="font-semibold text-sm">Vehicles</h2>
+          <button
+            onClick={() => setDrawing(v => ({...v, vehicleInitPosition: true, vehicleRoute: false}))}
+            className={`${tailwindStyles.button.basic}`}
+          >
+            <FaPlus /> Vehicle
+          </button>
+        </div>
+        <div className="flex flex-col gap-2">
+          {[vehicles.map((d, i) => {
+            return (
+              <div key={`vehicle-${i}`} className="flex text-sm flex-col gap-0">
+                <h3 className="font-semibold">
+                  Vehicle {d.id}
+                </h3> 
+                <div className="flex flex-row justify-between text-xs items-center">
+                  <h4 className="font-semibold">Steps: {d.steps.length}</h4> 
+                  <button
+                    onClick={() => setDrawing(v => ({...v, vehicleInitPosition: false, vehicleRoute: true}))}
+                    className={`${tailwindStyles.button.basic} text-xs`}
+                  >
+                    <FaPlus /> Step
+                  </button>
+                </div> 
+              </div>
+            )
+          })]}
+        </div>
       </div>
       <DeckGL
         layers={layers}
