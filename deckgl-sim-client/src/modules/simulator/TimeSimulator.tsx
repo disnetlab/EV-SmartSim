@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react"
+import { useState, useEffect } from "react"
 import dayjs from "dayjs"
 
 const times = ["07:00", "07:06", "07:13", "07:21"].map(time =>

@@ -1,8 +1,7 @@
-import DeckGL, { BitmapLayer, Color, GeoJsonLayer, IconLayer, MapView, MapViewState, PathLayer, Position, TileLayer } from "deck.gl"
-import type { TileLayerPickingInfo } from "@deck.gl/geo-layers"
+import DeckGL, { BitmapLayer, Color, FlyToInterpolator, GeoJsonLayer, IconLayer, LinearInterpolator, MapView, MapViewState, PathLayer, Position, ScatterplotLayer, TileLayer } from "deck.gl"
 import { PathStyleExtension } from "@deck.gl/extensions"
 import { useMemo, useState } from "react"
-import { FaCheckSquare, FaSquare } from "react-icons/fa"
+import { FaCheckSquare, FaSquare, FaTimes } from "react-icons/fa"
 import dayjs, { Dayjs } from "dayjs"
 import { FaCheck, FaPlus } from "react-icons/fa6"
 import { point, distance } from "@turf/turf"
@@ -13,11 +12,11 @@ const tailwindStyles = {
   },
 }
 
-const CLAYTON_COORDINATES = [145.1300, -37.9152] // Latitude, Longitude for Clayton, Victoria
+const INITIAL_COORDINATES = [144.95550000, -37.81133300] // Latitude, Longitude for Clayton, Victoria
 
 const INITIAL_VIEW_STATE: MapViewState = {
-  latitude: CLAYTON_COORDINATES[1],
-  longitude: CLAYTON_COORDINATES[0],
+  latitude: INITIAL_COORDINATES[1],
+  longitude: INITIAL_COORDINATES[0],
   zoom: 13,
   maxZoom: 20,
   maxPitch: 89,
@@ -67,11 +66,13 @@ const SimulatorBasic = ({
   onTilesLoad?: () => void,
 }) => {
 
+  const [viewState, setViewState] = useState<MapViewState>(INITIAL_VIEW_STATE)
+
   const [show, setShow] = useState({
     tileBgMap: true,
-    vectorBgMap: true,
+    vectorBgMap: false,
     datasetGenerator: true,
-    datasetImporter: true,
+    datasetImporter: false,
   })
 
   const resetDrawing = {
@@ -79,34 +80,52 @@ const SimulatorBasic = ({
     vehicleInitPosition: false, 
   }
   const [drawing, setDrawing] = useState(resetDrawing) // Track drawing mode
-  const [tempPathPoints, setTempPathPoints] = useState<Position[]>([]) // Store temporary path points for drawing
 
-  const [heading, setHeading] = useState<number>(0)
-  const [carPosition, setCarPosition] = useState<number[]>(CLAYTON_COORDINATES)
+  const resetStep: VehicleStep = {
+    type: "trip", 
+    destination: {
+      time: dayjs(),
+      position: [INITIAL_COORDINATES[0], INITIAL_COORDINATES[1]], 
+    },
+    routes: [],
+  }
+  const [tempStep, setTempStep] = useState<VehicleStep>(resetStep)
 
-  const [vehicles, setVehicles] = useState<Vehicle[]>([
-    {
-      id: 1,
-      initialPosition: [CLAYTON_COORDINATES[0], CLAYTON_COORDINATES[1]], 
-      steps: [],
-      heading: 0,
-      selected: false,
-    }
-  ])
+  // const initialVehicles = [
+  //   {
+  //     id: 1,
+  //     initialPosition: [INITIAL_COORDINATES[0], INITIAL_COORDINATES[1]], 
+  //     steps: [],
+  //     heading: 0,
+  //     selected: false,
+  //   }
+  // ]
+
+  const [vehicles, setVehicles] = useState<Vehicle[]>([])
 
   const addVehicle = (initialPosition: [longitude: number, latitude: number]) => {
     setVehicles(v => {
       const output = ([
-        ...v,
+        ...v.map(w => {
+          w.selected = false
+          return w
+        }),
         {
           id: vehicles.length + 1,
           initialPosition: initialPosition,
           steps: [],
           heading: 0,
-          selected: false,
+          selected: true,
         }
       ])
 
+      setViewState(w => ({
+        ...w,
+        longitude: initialPosition[0],
+        latitude: initialPosition[1],
+        transitionDuration: 200,
+        transitionInterpolator: new FlyToInterpolator(),
+      }))
       setDrawing(resetDrawing)
 
       return output
@@ -114,14 +133,40 @@ const SimulatorBasic = ({
   }
 
   const selectVehicle = (index: number) => {
-    setVehicles(v => ([
-      ...v.slice(0, index).map(w => ({...w, selected: false})),
-      {
-        ...v[index],
-        selected: true,
-      },
-      ...v.slice(index + 1).map(w => ({...w, selected: false})),
-    ]))
+    setVehicles(v => {
+
+      console.log("selectVehicle", v[index])
+
+      if (v[index].steps.length > 0) {
+        const latestStep = v[index].steps[v[index].steps.length - 1]
+        const latestPosition = latestStep.routes[latestStep.routes.length - 1]
+        setViewState(w => ({
+          ...w,
+          longitude: latestPosition[0],
+          latitude: latestPosition[1],
+          transitionDuration: 200,
+          transitionInterpolator: new FlyToInterpolator(),
+        }))
+      } else {
+        setViewState(w => ({
+          ...w,
+          longitude: v[index].initialPosition[0],
+          latitude: v[index].initialPosition[1],
+          transitionDuration: 200,
+          transitionInterpolator: new LinearInterpolator(),
+        }))
+      }
+
+      return [
+        ...v.slice(0, index).map(w => ({...w, selected: false})),
+        {
+          ...v[index],
+          selected: true,
+        },
+        ...v.slice(index + 1).map(w => ({...w, selected: false})),
+      ]
+    })
+
   }
 
   const selectedVehicle = useMemo(
@@ -140,9 +185,9 @@ const SimulatorBasic = ({
             type: "trip", 
             destination: {
               time: dayjs(),
-              position: tempPathPoints[tempPathPoints.length - 1],
+              position: tempStep.routes[tempStep.routes.length - 1],
             },
-            routes: tempPathPoints,
+            routes: tempStep.routes,
           }
         ]
       }
@@ -150,7 +195,7 @@ const SimulatorBasic = ({
       return d
     }))
 
-    setTempPathPoints([])
+    setTempStep(resetStep)
     setDrawing(resetDrawing)
 
   } 
@@ -165,12 +210,11 @@ const SimulatorBasic = ({
     const { coordinate } = event
 
     if (drawing.vehicleRoute && selectedVehicle) {
-      setTempPathPoints(current => {
-
+      setTempStep(current => {
         const initPath: Position[] = []
 
         // Add latest point as initial path
-        if (current.length === 0) {
+        if (current.routes.length === 0) {
 
           if (selectedVehicle.steps.length === 0) {
             initPath.push(selectedVehicle.initialPosition)
@@ -184,7 +228,12 @@ const SimulatorBasic = ({
           
         }
 
-        return [...initPath, ...current, coordinate]
+        const newRoutes = [...initPath, ...current.routes, coordinate]
+        
+        return {
+          ...current,
+          routes: newRoutes,
+        }
       })
     }
 
@@ -192,7 +241,6 @@ const SimulatorBasic = ({
       addVehicle(coordinate)
     }
 
-    console.log("pathPoints now", tempPathPoints)
   }
 
   const tileLayer = new TileLayer<ImageBitmap>({
@@ -306,10 +354,18 @@ const SimulatorBasic = ({
         return width
       },
     }),
+    new ScatterplotLayer<Vehicle>({
+      id: 'car-highlight-layer',
+      data: vehicles.filter(v => v.selected),
+      getPosition: d => d.steps.length === 0 ? d.initialPosition : d.steps[d.steps.length - 1].destination.position,
+      getRadius: 40,
+      radiusUnits: "pixels",
+      getFillColor: show.vectorBgMap ? [163, 230, 53, 100] : [77, 124, 15, 100],
+    }),
     new IconLayer<Vehicle>({
       id: 'car-layer',
       data: vehicles,
-      getIcon: d => ({
+      getIcon: () => ({
         url: '/car-icon.png',
         width: 1157/5,
         height: 486/5,
@@ -326,7 +382,7 @@ const SimulatorBasic = ({
       data: [
         {
           vehicleID: 1,
-          path: tempPathPoints, 
+          path: tempStep.routes, 
         } 
       ],
       getPath: d => d.path,
@@ -339,9 +395,9 @@ const SimulatorBasic = ({
       id: 'drawn-vehicle-steps-layer', // Unique by vehicle by steps
       data: vehiclePath,
       getPath: d => d.routes,
-      getColor: show.vectorBgMap ? [255, 255, 0] : [0, 0, 0],
+      getColor: show.vectorBgMap ? [163, 230, 53, 255] : [77, 124, 15, 255],
       lineWidthUnits: "pixels",
-      widthMinPixels: 2,
+      widthMinPixels: 4,
       getLineWidth: 2,
     }),
   ]
@@ -362,27 +418,40 @@ const SimulatorBasic = ({
         >
           {show.datasetGenerator ? <FaCheckSquare /> : <FaSquare />} Generate Data  
         </button>
+        {/*
         <button
           onClick={() => setShow(v => ({...v, datasetImporter: !v.datasetImporter}))}
           className={`${tailwindStyles.button.basic}`}
         >
           {show.datasetImporter ? <FaCheckSquare /> : <FaSquare />} Import Data  
         </button>
+        */}
       </div>
 
       <div className={`fixed w-full bg-white flex flex-row gap-2 z-20 justify-center transition-all p-4 ${((drawing.vehicleRoute && selectedVehicle) || drawing.vehicleInitPosition) ? 'top-0' : '-top-20'}`}>
-        {drawing.vehicleRoute && <h3>Draw Vehicle {selectedVehicle?.id} Routes for This Step</h3>} 
-        {drawing.vehicleInitPosition && <h3>Click on the map to place vehicle initial position</h3>} 
-        {drawing.vehicleRoute &&
+        {drawing.vehicleRoute && <div className="flex flex-row gap-2">
+          <h3>Draw Vehicle {selectedVehicle?.id} Step Routes</h3>
+          <button
+            onClick={() => {
+              if (tempStep.routes.length > 0) {
+                addVehicleSteps()
+              }
+            }}
+            className={`${tailwindStyles.button.basic} ${tempStep.routes.length > 0 ? 'bg-lime-400' : 'bg-slate-300 text-slate-500'}`}
+          >
+            <FaCheck /> Save Step
+          </button>
+          <input placeholder="Destination time" className="text-xs px-2" onChange={() => {}} value={dayjs().format()} />
           <button
             onClick={() => {
               addVehicleSteps()
             }}
             className={`${tailwindStyles.button.basic}`}
           >
-            <FaCheck /> Save Step
+            <FaTimes /> Cancel 
           </button>
-        }
+        </div>} 
+        {drawing.vehicleInitPosition && <h3>Click on the map to place vehicle initial position</h3>} 
       </div>
 
       <div className={`flex flex-col gap-4 fixed h-screen overflow-y-auto pb-8 bg-white transition-all w-[20rem] ${show.datasetGenerator && (!drawing.vehicleRoute && !drawing.vehicleInitPosition) ? '' : '-ml-[20rem]'} shadow z-20 pt-12`}>
@@ -470,7 +539,10 @@ const SimulatorBasic = ({
       <DeckGL
         layers={layers}
         views={new MapView({repeat: true})}
-        initialViewState={INITIAL_VIEW_STATE}
+        viewState={viewState}
+        onViewStateChange={vs => {
+          setViewState(vs.viewState)
+        }}
         controller={true}
         style={{pointerEvents: "auto"}}
         onClick={handleMapClick}

@@ -14,8 +14,14 @@ const Dialog = forwardRef<HTMLDivElement, DialogProps>(({
   className,
   ...props
 }, ref) => {
+
+  console.log(props)
+
   return (
-    <div className="">
+    <div
+      ref={ref}
+      className=""
+    >
 
     </div>
   )
