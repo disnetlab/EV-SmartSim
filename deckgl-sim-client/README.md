@@ -21,6 +21,10 @@
                 - Input time from
                 - Input time to
                 - Submit step
+
+
+- ev current position need to be on radius R meters from charging station to be considered charged there
+
 ### User Inputs
 - Vehicles
     - Vehicle ID

@@ -1,9 +1,9 @@
 import DeckGL, { BitmapLayer, Color, GeoJsonLayer, IconLayer, MapView, MapViewState, PathLayer, Position, TileLayer } from "deck.gl"
 import type { TileLayerPickingInfo } from "@deck.gl/geo-layers"
 import { PathStyleExtension } from "@deck.gl/extensions"
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { FaCheckSquare, FaSquare } from "react-icons/fa";
-import { Dayjs } from "dayjs";
+import dayjs, { Dayjs } from "dayjs";
 import { FaCheck, FaPlus } from "react-icons/fa6";
 
 const tailwindStyles = {
@@ -44,7 +44,7 @@ interface VehicleStep {
     position: Position 
     time: Dayjs
   }
-  routeInBetween: Position[]
+  routes: Position[]
 }
 
 interface Vehicle {
@@ -52,6 +52,7 @@ interface Vehicle {
   initialPosition: [longitude: number, latitude: number]
   steps: VehicleStep[]
   heading: number
+  selected: boolean
 }
 
 /* global window */
@@ -88,6 +89,7 @@ const SimulatorBasic = ({
       initialPosition: [CLAYTON_COORDINATES[0], CLAYTON_COORDINATES[1]], 
       steps: [],
       heading: 0,
+      selected: false,
     }
   ])
 
@@ -100,6 +102,7 @@ const SimulatorBasic = ({
           initialPosition: initialPosition,
           steps: [],
           heading: 0,
+          selected: false,
         }
       ])
 
@@ -109,9 +112,46 @@ const SimulatorBasic = ({
     })
   }
 
+  const selectVehicle = (index: number) => {
+    setVehicles(v => ([
+      ...v.slice(0, index).map(w => ({...w, selected: false})),
+      {
+        ...v[index],
+        selected: true,
+      },
+      ...v.slice(index + 1).map(w => ({...w, selected: false})),
+    ]))
+  }
+
+  const selectedVehicle = useMemo(
+    () => vehicles.find(v => v.selected),
+    [vehicles],
+  ) 
+
   const addVehicleSteps = () => {
 
+    setVehicles(vehicles.map((d) => {
+
+      if (d.selected) {
+        d.steps = [
+          ...d.steps,
+          {
+            type: "trip", 
+            destination: {
+              time: dayjs(),
+              position: tempPathPoints[tempPathPoints.length - 1],
+            },
+            routes: tempPathPoints,
+          }
+        ]
+      }
+
+      return d
+    }))
+
+    setTempPathPoints([])
     setDrawing(resetDrawing)
+    console.log("vehicles updated", vehicles.map(v => v.steps.map((w, i) => ({...w, vehicleID: v.id, stepID: i}))).flat())
 
   } 
 
@@ -270,6 +310,20 @@ const SimulatorBasic = ({
       widthMinPixels: 4,
       getLineWidth: 4,
     }),
+    new PathLayer({
+      id: 'drawn-vehicle-steps-layer', // Unique by vehicle by steps
+      data: [
+        {
+          vehicleID: 1,
+          path: tempPathPoints, 
+        } 
+      ],
+      getPath: d => d.path,
+      getColor: [255, 255, 0],
+      lineWidthUnits: "pixels",
+      widthMinPixels: 2,
+      getLineWidth: 2,
+    }),
   ]
 
   return (
@@ -296,8 +350,8 @@ const SimulatorBasic = ({
         </button>
       </div>
 
-      <div className={`fixed w-full bg-white flex flex-row gap-2 z-20 justify-center transition-all p-4 ${(drawing.vehicleRoute || drawing.vehicleInitPosition) ? 'top-0' : '-top-20'}`}>
-        {drawing.vehicleRoute && <h3>Draw Vehicle Routes for This Step</h3>} 
+      <div className={`fixed w-full bg-white flex flex-row gap-2 z-20 justify-center transition-all p-4 ${((drawing.vehicleRoute && selectedVehicle) || drawing.vehicleInitPosition) ? 'top-0' : '-top-20'}`}>
+        {drawing.vehicleRoute && <h3>Draw Vehicle {selectedVehicle?.id} Routes for This Step</h3>} 
         {drawing.vehicleInitPosition && <h3>Click on the map to place vehicle initial position</h3>} 
         {drawing.vehicleRoute &&
           <button
@@ -311,44 +365,50 @@ const SimulatorBasic = ({
         }
       </div>
 
-      <div className={`flex flex-col gap-2 fixed h-screen bg-white p-4 transition-all w-[20rem] ${show.datasetGenerator && (!drawing.vehicleRoute && !drawing.vehicleInitPosition) ? '' : '-ml-[20rem]'} shadow z-20 pt-12`}>
-        <h1 className="font-semibold">Dataset Generator</h1>
-
-        <button
-          onClick={() => setDrawing(v => ({
-            ...v,
-            vehicleRoute: !v.vehicleRoute,
-          }))}
-          className={`${tailwindStyles.button.basic}`}
-        >
-          {drawing.vehicleRoute ? <FaCheckSquare /> : <FaSquare />} Draw route
-        </button>
-
-        <div className="flex flex-row justify-between">
-          <h2 className="font-semibold text-sm">Vehicles</h2>
-          <button
-            onClick={() => setDrawing(v => ({...v, vehicleInitPosition: true, vehicleRoute: false}))}
-            className={`${tailwindStyles.button.basic}`}
-          >
-            <FaPlus /> Vehicle
-          </button>
+      <div className={`flex flex-col gap-4 fixed h-screen overflow-y-auto pb-8 bg-white transition-all w-[20rem] ${show.datasetGenerator && (!drawing.vehicleRoute && !drawing.vehicleInitPosition) ? '' : '-ml-[20rem]'} shadow z-20 pt-12`}>
+        <div className="flex flex-col gap-2 px-4">
+          <h1 className="font-semibold">Dataset Generator</h1>
+          <div className="flex flex-row justify-between items-center">
+            <h2 className="font-semibold text-sm">Vehicles</h2>
+            <button
+              onClick={() => setDrawing(v => ({...v, vehicleInitPosition: true, vehicleRoute: false}))}
+              className={`${tailwindStyles.button.basic}`}
+            >
+              <FaPlus /> Vehicle
+            </button>
+          </div>
         </div>
-        <div className="flex flex-col gap-2">
+
+        <div className="flex flex-col">
           {[vehicles.map((d, i) => {
             return (
-              <div key={`vehicle-${i}`} className="flex text-sm flex-col gap-0">
+              <div
+                onClick={() => selectVehicle(i)}
+                key={`vehicle-${i}`}
+                className={`flex text-sm flex-col gap-0 px-4 py-4 ${d.selected ? 'bg-lime-200 hover:bg-lime-300' : 'hover:bg-slate-100'} hover:cursor-pointer`}
+              >
                 <h3 className="font-semibold">
                   Vehicle {d.id}
                 </h3> 
                 <div className="flex flex-row justify-between text-xs items-center">
                   <h4 className="font-semibold">Steps: {d.steps.length}</h4> 
                   <button
-                    onClick={() => setDrawing(v => ({...v, vehicleInitPosition: false, vehicleRoute: true}))}
+                    onClick={() => {
+                      selectVehicle(i)
+                      setDrawing(v => ({...v, vehicleInitPosition: false, vehicleRoute: true}))
+                    }}
                     className={`${tailwindStyles.button.basic} text-xs`}
                   >
                     <FaPlus /> Step
                   </button>
                 </div> 
+                <div className="flex flex-col gap-2">
+                  {d.steps.map((d2, i2) => {
+                    return (
+                      <div key={`vehicle-${i}-step-${i2}`}>{JSON.stringify(d2)}</div>
+                    )
+                  })}
+                </div>
               </div>
             )
           })]}
