@@ -1,10 +1,11 @@
 import DeckGL, { BitmapLayer, Color, GeoJsonLayer, IconLayer, MapView, MapViewState, PathLayer, Position, TileLayer } from "deck.gl"
 import type { TileLayerPickingInfo } from "@deck.gl/geo-layers"
 import { PathStyleExtension } from "@deck.gl/extensions"
-import { useMemo, useState } from "react";
-import { FaCheckSquare, FaSquare } from "react-icons/fa";
-import dayjs, { Dayjs } from "dayjs";
-import { FaCheck, FaPlus } from "react-icons/fa6";
+import { useMemo, useState } from "react"
+import { FaCheckSquare, FaSquare } from "react-icons/fa"
+import dayjs, { Dayjs } from "dayjs"
+import { FaCheck, FaPlus } from "react-icons/fa6"
+import { point, distance } from "@turf/turf"
 
 const tailwindStyles = {
   button: {
@@ -151,16 +152,40 @@ const SimulatorBasic = ({
 
     setTempPathPoints([])
     setDrawing(resetDrawing)
-    console.log("vehicles updated", vehicles.map(v => v.steps.map((w, i) => ({...w, vehicleID: v.id, stepID: i}))).flat())
 
   } 
+
+  const vehiclePath: (VehicleStep & {vehicleID: number, stepID: number})[] = useMemo(
+    () => vehicles.map(v => v.steps.map((w, i) => ({...w, vehicleID: v.id, stepID: i}))).flat(),
+    [vehicles],
+  )
 
   const handleMapClick = (event: any) => {
     if (!drawing) return
     const { coordinate } = event
 
-    if (drawing.vehicleRoute) {
-      setTempPathPoints(current => [...current, coordinate])
+    if (drawing.vehicleRoute && selectedVehicle) {
+      setTempPathPoints(current => {
+
+        const initPath: Position[] = []
+
+        // Add latest point as initial path
+        if (current.length === 0) {
+
+          if (selectedVehicle.steps.length === 0) {
+            initPath.push(selectedVehicle.initialPosition)
+          } else {
+            const latestStep = selectedVehicle.steps[selectedVehicle.steps.length - 1]
+            const latestPosition = latestStep.routes[latestStep.routes.length - 1]
+            if (latestPosition) {
+              initPath.push(latestPosition)
+            }
+          }
+          
+        }
+
+        return [...initPath, ...current, coordinate]
+      })
     }
 
     if (drawing.vehicleInitPosition) {
@@ -312,14 +337,9 @@ const SimulatorBasic = ({
     }),
     new PathLayer({
       id: 'drawn-vehicle-steps-layer', // Unique by vehicle by steps
-      data: [
-        {
-          vehicleID: 1,
-          path: tempPathPoints, 
-        } 
-      ],
-      getPath: d => d.path,
-      getColor: [255, 255, 0],
+      data: vehiclePath,
+      getPath: d => d.routes,
+      getColor: show.vectorBgMap ? [255, 255, 0] : [0, 0, 0],
       lineWidthUnits: "pixels",
       widthMinPixels: 2,
       getLineWidth: 2,
@@ -385,27 +405,60 @@ const SimulatorBasic = ({
               <div
                 onClick={() => selectVehicle(i)}
                 key={`vehicle-${i}`}
-                className={`flex text-sm flex-col gap-0 px-4 py-4 ${d.selected ? 'bg-lime-200 hover:bg-lime-300' : 'hover:bg-slate-100'} hover:cursor-pointer`}
+                className={`flex text-sm flex-col gap-2 px-4 py-4 ${d.selected ? 'bg-lime-200 hover:bg-lime-300' : 'hover:bg-slate-100'} hover:cursor-pointer`}
               >
                 <h3 className="font-semibold">
                   Vehicle {d.id}
                 </h3> 
                 <div className="flex flex-row justify-between text-xs items-center">
-                  <h4 className="font-semibold">Steps: {d.steps.length}</h4> 
-                  <button
-                    onClick={() => {
-                      selectVehicle(i)
-                      setDrawing(v => ({...v, vehicleInitPosition: false, vehicleRoute: true}))
-                    }}
-                    className={`${tailwindStyles.button.basic} text-xs`}
-                  >
-                    <FaPlus /> Step
-                  </button>
+                  <h4 className="font-semibold">Total steps: {d.steps.length}</h4> 
+                  <div className="flex flex-row items-center">
+                    <FaPlus className="mr-2" /> 
+                    <button
+                      onClick={() => {
+                        selectVehicle(i)
+                        setDrawing(v => ({...v, vehicleInitPosition: false, vehicleRoute: true}))
+                      }}
+                      className={`${tailwindStyles.button.basic} rounded-none gap-1 text-xs`}
+                    >
+                      Trip 
+                    </button>
+                    <button
+                      onClick={() => {
+                        selectVehicle(i)
+                        setDrawing(v => ({...v, vehicleInitPosition: false, vehicleRoute: true}))
+                      }}
+                      className={`${tailwindStyles.button.basic} rounded-none gap-1 text-xs`}
+                    >
+                      CDC 
+                    </button>
+                    <button
+                      onClick={() => {
+                        selectVehicle(i)
+                        setDrawing(v => ({...v, vehicleInitPosition: false, vehicleRoute: true}))
+                      }}
+                      className={`${tailwindStyles.button.basic} rounded-none gap-1 text-xs`}
+                    >
+                      Stop 
+                    </button>
+                  </div>
                 </div> 
                 <div className="flex flex-col gap-2">
                   {d.steps.map((d2, i2) => {
+
+                    let totalDistance = 0
+                    for (let i = 0; i < d2.routes.length - 1; i++) {
+                      const point1 = point([d2.routes[i][0], d2.routes[i][1]])
+                      const point2 = point([d2.routes[i + 1][0], d2.routes[i + 1][1]])
+                      totalDistance += distance(point1, point2, { units: 'kilometers' })
+                    }
+
                     return (
-                      <div key={`vehicle-${i}-step-${i2}`}>{JSON.stringify(d2)}</div>
+                      <div className="flex gap-2 justify-between text-xs flex-row" key={`vehicle-${i}-step-${i2}`}>
+                        <span>{i + 1}</span>
+                        <span>{d2.type}</span>
+                        <span>{totalDistance.toFixed(4)} km</span>
+                      </div>
                     )
                   })}
                 </div>
