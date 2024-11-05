@@ -26,6 +26,7 @@ Latest Demo: [ev-smartsim.pages.dev](https://ev-smartsim.pages.dev)
 
 
 - ev current position need to be on radius R meters from charging station to be considered charged there
+- intelligent data format converter 
 
 ### User Inputs
 - Vehicles

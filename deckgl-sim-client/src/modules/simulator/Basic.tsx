@@ -1,18 +1,27 @@
 import DeckGL, { BitmapLayer, Color, FlyToInterpolator, GeoJsonLayer, IconLayer, LinearInterpolator, MapView, MapViewState, PathLayer, Position, ScatterplotLayer, TileLayer } from "deck.gl"
 import { PathStyleExtension } from "@deck.gl/extensions"
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { FaCheckSquare, FaSquare, FaTimes } from "react-icons/fa"
 import dayjs, { Dayjs } from "dayjs"
 import { FaCheck, FaPlus } from "react-icons/fa6"
 import { point, distance } from "@turf/turf"
+import DatePicker from "react-datepicker"
+import 'react-datepicker/dist/react-datepicker.css'
 
 const tailwindStyles = {
   button: {
     basic: `flex flex-row py-1 px-2 gap-2 bg-slate-200 hover:bg-slate-300 rounded items-center text-xs`,
   },
+  input: {
+    basic: `border border-slate-300 py-1 px-2 rounded`,
+  },
 }
 
+type AppStep = "normal" | "addVehicle" | "updateNewVehicleInitTime" | "addVehicleRoute"
+
 const INITIAL_COORDINATES = [144.95550000, -37.81133300] // Latitude, Longitude for Clayton, Victoria
+
+// const DEFAULT_VEHICLE_SPEED_KMH = 60
 
 const INITIAL_VIEW_STATE: MapViewState = {
   latitude: INITIAL_COORDINATES[1],
@@ -39,10 +48,10 @@ const LINK_STYLE: React.CSSProperties = {
 }
 
 interface VehicleStep {
-  type: "trip" | "stop" | "cdc"
+  type: "trip" | "stop" | "cdc" | "init"
   destination: {
     position: Position 
-    time: Dayjs
+    time?: Dayjs
   }
   routes: Position[]
 }
@@ -66,8 +75,13 @@ const SimulatorBasic = ({
   onTilesLoad?: () => void,
 }) => {
 
+  // Simulator step
+  const [appStep, setAppStep] = useState<AppStep>("normal")
+
+  // Deck.gl viewState
   const [viewState, setViewState] = useState<MapViewState>(INITIAL_VIEW_STATE)
 
+  // App menus visibiliy config 
   const [show, setShow] = useState({
     tileBgMap: true,
     vectorBgMap: false,
@@ -75,36 +89,55 @@ const SimulatorBasic = ({
     datasetImporter: false,
   })
 
-  const resetDrawing = {
-    vehicleRoute: false,
-    vehicleInitPosition: false, 
-  }
-  const [drawing, setDrawing] = useState(resetDrawing) // Track drawing mode
+  // List of vehicles in simulator
+  const [vehicles, setVehicles] = useState<Vehicle[]>([])
 
+  // Temporary vehicle steps creation
   const resetStep: VehicleStep = {
     type: "trip", 
     destination: {
-      time: dayjs(),
       position: [INITIAL_COORDINATES[0], INITIAL_COORDINATES[1]], 
     },
     routes: [],
   }
+
   const [tempStep, setTempStep] = useState<VehicleStep>(resetStep)
 
-  // const initialVehicles = [
-  //   {
-  //     id: 1,
-  //     initialPosition: [INITIAL_COORDINATES[0], INITIAL_COORDINATES[1]], 
-  //     steps: [],
-  //     heading: 0,
-  //     selected: false,
-  //   }
-  // ]
+  useEffect(() => {
 
-  const [vehicles, setVehicles] = useState<Vehicle[]>([])
+    console.log("tempStep", tempStep)
+  }, [tempStep])
 
+  // Get selected vehicle
+  const selectedVehicle = useMemo(
+    () => vehicles.find(v => v.selected),
+    [vehicles],
+  ) 
+
+  // Update new vehicle init time
+  const updateNewVehicleInitTime = (date: Dayjs) => {
+    setVehicles(vehicles.map((d) => {
+      if (d.selected) {
+        d.steps[0].destination.time = date
+      }
+      return d
+    }))
+  }
+
+  // Add new vehicle
   const addVehicle = (initialPosition: [longitude: number, latitude: number]) => {
+
+    // Add the vehicle
     setVehicles(v => {
+      const newVehicleStep: VehicleStep = {
+        type: "init",
+        destination: {
+          time: dayjs(),
+          position: initialPosition,     
+        },
+        routes: [initialPosition],
+      }
+
       const output = ([
         ...v.map(w => {
           w.selected = false
@@ -113,7 +146,7 @@ const SimulatorBasic = ({
         {
           id: vehicles.length + 1,
           initialPosition: initialPosition,
-          steps: [],
+          steps: [newVehicleStep],
           heading: 0,
           selected: true,
         }
@@ -126,13 +159,15 @@ const SimulatorBasic = ({
         transitionDuration: 200,
         transitionInterpolator: new FlyToInterpolator(),
       }))
-      setDrawing(resetDrawing)
+
+      setAppStep("updateNewVehicleInitTime")
 
       return output
     })
   }
 
-  const selectVehicle = (index: number) => {
+  // Select vehicle by index
+  const selectVehicleByIndex = (index: number) => {
     setVehicles(v => {
 
       console.log("selectVehicle", v[index])
@@ -169,13 +204,8 @@ const SimulatorBasic = ({
 
   }
 
-  const selectedVehicle = useMemo(
-    () => vehicles.find(v => v.selected),
-    [vehicles],
-  ) 
-
+  // Add vehicle steps
   const addVehicleSteps = () => {
-
     setVehicles(vehicles.map((d) => {
 
       if (d.selected) {
@@ -184,7 +214,7 @@ const SimulatorBasic = ({
           {
             type: "trip", 
             destination: {
-              time: dayjs(),
+              time: tempStep.destination.time,
               position: tempStep.routes[tempStep.routes.length - 1],
             },
             routes: tempStep.routes,
@@ -194,22 +224,57 @@ const SimulatorBasic = ({
 
       return d
     }))
-
     setTempStep(resetStep)
-    setDrawing(resetDrawing)
-
+    setAppStep("normal")
   } 
 
+  // Update temporary vehicle step time delta
+  const updateTempStepTimeDelta = (minute: number) => {
+
+    if (selectedVehicle) {
+      // Get current destination time for this vehicle 
+      const currentDestinationTime = selectedVehicle.steps[selectedVehicle.steps.length - 1].destination.time
+
+      if (currentDestinationTime) {
+        const newDestinationTime = currentDestinationTime.add(minute, "minute")
+        console.log("newDestionationTime", newDestinationTime)
+        setTempStep(v => ({...v, destination: {...v.destination, time: newDestinationTime}}))
+      }
+    }
+  } 
+
+  const tempStepTimeDelta = useMemo(
+    () => {
+
+      if (selectedVehicle) {
+        // Get current destination time for this vehicle 
+        const currentDestinationTime = selectedVehicle.steps[selectedVehicle.steps.length - 1].destination.time
+
+        const newDestinationTime = tempStep.destination.time
+
+        if (currentDestinationTime && newDestinationTime) {
+          const minuteDiff = newDestinationTime.diff(currentDestinationTime, "minute")
+          return minuteDiff
+        }
+      }
+
+      return '' 
+    },
+    [tempStep],
+  ) 
+
+  // Convert steps from each vehicles into Deck.gl readable path
   const vehiclePath: (VehicleStep & {vehicleID: number, stepID: number})[] = useMemo(
     () => vehicles.map(v => v.steps.map((w, i) => ({...w, vehicleID: v.id, stepID: i}))).flat(),
     [vehicles],
   )
 
+  // Handle Deck.gl map click for various simulator functions 
   const handleMapClick = (event: any) => {
-    if (!drawing) return
+    if (appStep !== "addVehicleRoute" && appStep !== "addVehicle") return
     const { coordinate } = event
 
-    if (drawing.vehicleRoute && selectedVehicle) {
+    if (appStep === "addVehicleRoute" && selectedVehicle) {
       setTempStep(current => {
         const initPath: Position[] = []
 
@@ -237,12 +302,13 @@ const SimulatorBasic = ({
       })
     }
 
-    if (drawing.vehicleInitPosition) {
+    if (appStep === "addVehicle") {
       addVehicle(coordinate)
     }
 
   }
 
+  // Basemap layer using Open Street Map service
   const tileLayer = new TileLayer<ImageBitmap>({
     // https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames#Tile_servers
     data: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
@@ -286,6 +352,7 @@ const SimulatorBasic = ({
     }
   })
 
+  // All Deck.gl layers used in simulator
   const layers = [
     show.tileBgMap && tileLayer,
     show.vectorBgMap && new GeoJsonLayer({
@@ -404,7 +471,13 @@ const SimulatorBasic = ({
 
   return (
     <div className="w-full min-h-screen relative bg-slate-900">
-      <div className={`flex flex-row fixed w-full bg-white p-2 text-sm transition-all items-center gap-2 shadow z-30 ${(drawing.vehicleRoute || drawing.vehicleInitPosition) ? '-top-20' : 'top-0 '}`}>
+
+      {/* Top Navigation */}
+      <div
+        id="top-navigation"
+        className={`flex flex-row fixed w-full bg-white p-2 text-sm transition-all items-center gap-2 shadow z-30
+        ${appStep === "normal" ? 'top-0' : '-top-20'}`}
+      >
         <h1 className="font-semibold mr-2">EV-SmartSim</h1>
         <button
           onClick={() => setShow(v => ({...v, vectorBgMap: !v.vectorBgMap}))}
@@ -425,42 +498,104 @@ const SimulatorBasic = ({
         >
           {show.datasetImporter ? <FaCheckSquare /> : <FaSquare />} Import Data  
         </button>
+        <button
+          className={`${tailwindStyles.button.basic}`}
+        >
+          Suggestion Form
+        </button>
         */}
       </div>
 
-      <div className={`fixed w-full bg-white flex flex-row gap-2 z-20 justify-center transition-all p-4 ${((drawing.vehicleRoute && selectedVehicle) || drawing.vehicleInitPosition) ? 'top-0' : '-top-20'}`}>
-        {drawing.vehicleRoute && <div className="flex flex-row gap-2">
-          <h3>Draw Vehicle {selectedVehicle?.id} Step Routes</h3>
+
+      {/* Top Interface */}
+      <div
+        id="top-interface"
+        className={`fixed w-full bg-white flex flex-row gap-2 z-20 justify-center transition-all p-4
+        ${(appStep === "addVehicle" || appStep === "addVehicleRoute" || appStep === "updateNewVehicleInitTime" ) ? 'top-0' : '-top-20'}`}
+      >
+
+        {/* Add Vehicle */}
+        {appStep === "addVehicle" && <h3>Click on the map to place vehicle initial position</h3>} 
+
+        {/* Update New Vehicle Init Time */}
+        {appStep === "updateNewVehicleInitTime" &&
+          <div className="flex flex-row gap-2 items-center">
+            <h3>Vehicle intialisation time</h3>
+            <DatePicker
+              dateFormat={`yyyy-MM-dd h:mm`}
+              placeholderText="Input initialisation time"
+              selected={selectedVehicle?.steps[0].destination.time?.toDate()}
+              onChange={date => {
+                updateNewVehicleInitTime(dayjs(date))
+              }}
+              timeIntervals={1}
+              showTimeSelect
+              className="py-1 px-2 text-xs"
+              calendarClassName=""
+            />
           <button
             onClick={() => {
-              if (tempStep.routes.length > 0) {
-                addVehicleSteps()
-              }
+              setAppStep("normal")
             }}
-            className={`${tailwindStyles.button.basic} ${tempStep.routes.length > 0 ? 'bg-lime-400' : 'bg-slate-300 text-slate-500'}`}
+            className={`${tailwindStyles.button.basic} bg-lime-400`}
           >
-            <FaCheck /> Save Step
+            <FaTimes /> Save 
           </button>
-          <input placeholder="Destination time" className="text-xs px-2" onChange={() => {}} value={dayjs().format()} />
-          <button
-            onClick={() => {
-              addVehicleSteps()
-            }}
-            className={`${tailwindStyles.button.basic}`}
-          >
-            <FaTimes /> Cancel 
-          </button>
-        </div>} 
-        {drawing.vehicleInitPosition && <h3>Click on the map to place vehicle initial position</h3>} 
+          </div>
+        } 
+
+        {/* Add Vehicle Route */}
+        {appStep === "addVehicleRoute" &&
+          <div className="flex flex-row gap-2 items-center">
+            <h3>Draw vehicle {selectedVehicle?.id} step routes</h3>
+            <input 
+              value={tempStepTimeDelta}
+              onChange={e => {
+                if (e.target.value) {
+                  updateTempStepTimeDelta(Number(e.target.value))
+                }
+              }}
+              className={`${tailwindStyles.input.basic}`} 
+              placeholder="Time delta (minutes)"
+            />
+            <span className="text-xs">minutes</span>
+            <button
+              onClick={() => {
+                if (tempStep.routes.length > 0 && tempStep.destination.time) {
+                  addVehicleSteps()
+                }
+              }}
+              className={`${tailwindStyles.button.basic} ${(tempStep.routes.length > 0 && tempStep.destination.time) ? 'bg-lime-400' : 'bg-slate-300 text-slate-500'}`}
+            >
+              <FaCheck /> Save Step
+            </button>
+            <button
+              onClick={() => {
+                setAppStep("normal")
+                setTempStep(resetStep)
+              }}
+              className={`${tailwindStyles.button.basic}`}
+            >
+              <FaTimes /> Cancel 
+            </button>
+          </div>
+        } 
       </div>
 
-      <div className={`flex flex-col gap-4 fixed h-screen overflow-y-auto pb-8 bg-white transition-all w-[20rem] ${show.datasetGenerator && (!drawing.vehicleRoute && !drawing.vehicleInitPosition) ? '' : '-ml-[20rem]'} shadow z-20 pt-12`}>
+      {/* Sidebar Dataset Generator */}
+      <div
+        id="sidebar-dataset-generator"
+        className={`flex flex-col gap-4 fixed h-screen overflow-y-auto pb-8 bg-white transition-all w-[20rem]
+        ${show.datasetGenerator && (appStep === "normal") ? '' : '-ml-[20rem]'} shadow z-20 pt-12`}
+      >
+
+        {/* Vehicles title and menu */}
         <div className="flex flex-col gap-2 px-4">
           <h1 className="font-semibold">Dataset Generator</h1>
           <div className="flex flex-row justify-between items-center">
             <h2 className="font-semibold text-sm">Vehicles</h2>
             <button
-              onClick={() => setDrawing(v => ({...v, vehicleInitPosition: true, vehicleRoute: false}))}
+              onClick={() => setAppStep("addVehicle")}
               className={`${tailwindStyles.button.basic}`}
             >
               <FaPlus /> Vehicle
@@ -468,11 +603,12 @@ const SimulatorBasic = ({
           </div>
         </div>
 
+        {/* List of vehicles */}
         <div className="flex flex-col">
           {[vehicles.map((d, i) => {
             return (
               <div
-                onClick={() => selectVehicle(i)}
+                onClick={() => selectVehicleByIndex(i)}
                 key={`vehicle-${i}`}
                 className={`flex text-sm flex-col gap-2 px-4 py-4 ${d.selected ? 'bg-lime-200 hover:bg-lime-300' : 'hover:bg-slate-100'} hover:cursor-pointer`}
               >
@@ -485,8 +621,8 @@ const SimulatorBasic = ({
                     <FaPlus className="mr-2" /> 
                     <button
                       onClick={() => {
-                        selectVehicle(i)
-                        setDrawing(v => ({...v, vehicleInitPosition: false, vehicleRoute: true}))
+                        selectVehicleByIndex(i)
+                        setAppStep("addVehicleRoute")
                       }}
                       className={`${tailwindStyles.button.basic} rounded-none gap-1 text-xs`}
                     >
@@ -494,8 +630,7 @@ const SimulatorBasic = ({
                     </button>
                     <button
                       onClick={() => {
-                        selectVehicle(i)
-                        setDrawing(v => ({...v, vehicleInitPosition: false, vehicleRoute: true}))
+                        selectVehicleByIndex(i)
                       }}
                       className={`${tailwindStyles.button.basic} rounded-none gap-1 text-xs`}
                     >
@@ -503,8 +638,7 @@ const SimulatorBasic = ({
                     </button>
                     <button
                       onClick={() => {
-                        selectVehicle(i)
-                        setDrawing(v => ({...v, vehicleInitPosition: false, vehicleRoute: true}))
+                        selectVehicleByIndex(i)
                       }}
                       className={`${tailwindStyles.button.basic} rounded-none gap-1 text-xs`}
                     >
@@ -512,6 +646,8 @@ const SimulatorBasic = ({
                     </button>
                   </div>
                 </div> 
+
+                {/* List of steps of this vehicle */}
                 <div className="flex flex-col gap-2">
                   {d.steps.map((d2, i2) => {
 
@@ -526,6 +662,7 @@ const SimulatorBasic = ({
                       <div className="flex gap-2 justify-between text-xs flex-row" key={`vehicle-${i}-step-${i2}`}>
                         <span>{i + 1}</span>
                         <span>{d2.type}</span>
+                        <span>{d2.destination.time?.format("HH:mm")}</span>
                         <span>{totalDistance.toFixed(4)} km</span>
                       </div>
                     )
