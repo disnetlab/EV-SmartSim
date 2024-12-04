@@ -2600,6 +2600,11 @@
     "@types/prop-types" "*"
     csstype "^3.0.2"
 
+"@types/wellknown@^0.5.8":
+  version "0.5.8"
+  resolved "https://registry.yarnpkg.com/@types/wellknown/-/wellknown-0.5.8.tgz#5da12a97fd90b64d3688e7e602f1216d0f3103e1"
+  integrity sha512-/tXv+IfentaS3F0VplScdl+pwP7biW4RBnOxCTtoWlpNiulFBQWqA8rA7r/knavu9SELsFcNVtdGo6YNIElMdw==
+
 "@typescript-eslint/eslint-plugin@8.12.2":
   version "8.12.2"
   resolved "https://registry.yarnpkg.com/@typescript-eslint/eslint-plugin/-/eslint-plugin-8.12.2.tgz#c2ef660bb83fd1432368319312a2581fc92ccac1"

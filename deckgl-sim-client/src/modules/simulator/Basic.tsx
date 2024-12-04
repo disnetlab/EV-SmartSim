@@ -1,16 +1,32 @@
-import DeckGL, { BitmapLayer, Color, FlyToInterpolator, GeoJsonLayer, IconLayer, LinearInterpolator, MapView, MapViewState, PathLayer, Position, ScatterplotLayer, TileLayer } from "deck.gl"
+import DeckGL, { 
+  BitmapLayer,
+  Color,
+  FlyToInterpolator,
+  GeoJsonLayer,
+  IconLayer,
+  MapView,
+  MapViewState,
+  PathLayer,
+  Position,
+  ScatterplotLayer,
+  TileLayer
+} from "deck.gl"
 import { PathStyleExtension } from "@deck.gl/extensions"
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { FaCheckSquare, FaSquare, FaTimes } from "react-icons/fa"
 import dayjs, { Dayjs } from "dayjs"
-import { FaCheck, FaPlus } from "react-icons/fa6"
+import { FaArrowRotateRight, FaCheck, FaDeleteLeft, FaPlay, FaPlus, FaStop, FaTrash } from "react-icons/fa6"
 import { point, distance } from "@turf/turf"
 import DatePicker from "react-datepicker"
 import 'react-datepicker/dist/react-datepicker.css'
+import localforage from "localforage"
+import * as turf from "@turf/turf"
+import * as wkt from "wellknown"
 
 const tailwindStyles = {
   button: {
-    basic: `flex flex-row py-1 px-2 gap-2 bg-slate-200 hover:bg-slate-300 rounded items-center text-xs`,
+    basic: `flex flex-row py-1 px-2 gap-2 bg-slate-200 hover:bg-slate-300 rounded items-center text-xs justify-center`,
+    big: `flex flex-row py-2 px-4 gap-2 bg-slate-200 hover:bg-slate-300 rounded items-center text-lg justify-center`,
   },
   input: {
     basic: `border border-slate-300 py-1 px-2 rounded`,
@@ -26,7 +42,7 @@ const INITIAL_COORDINATES = [144.95550000, -37.81133300] // Latitude, Longitude 
 const INITIAL_VIEW_STATE: MapViewState = {
   latitude: INITIAL_COORDINATES[1],
   longitude: INITIAL_COORDINATES[0],
-  zoom: 13,
+  zoom: 12,
   maxZoom: 20,
   maxPitch: 89,
   bearing: 0
@@ -53,15 +69,28 @@ interface VehicleStep {
     position: Position 
     time?: Dayjs
   }
+  totalDistanceMeter: number
+  totalTimeMS: number
   routes: Position[]
+  distanceProgression: number[]
+  vehicleProgressionMS: number[]
 }
 
 interface Vehicle {
   id: number,
-  initialPosition: [longitude: number, latitude: number]
   steps: VehicleStep[]
-  heading: number
+  run: {
+    progression: number
+    position: Position 
+    heading: number
+  }
   selected: boolean
+}
+
+interface SimulationConfig {
+  start: boolean,
+  startTime?: Dayjs,
+  endTime?: Dayjs,
 }
 
 /* global window */
@@ -75,11 +104,198 @@ const SimulatorBasic = ({
   onTilesLoad?: () => void,
 }) => {
 
+  /* -------------------- SIMULATOR STATE -------------------- */
+  const MS_PER_MINUTE_SIMULATION = 500
+
   // Simulator step
   const [appStep, setAppStep] = useState<AppStep>("normal")
 
   // Deck.gl viewState
   const [viewState, setViewState] = useState<MapViewState>(INITIAL_VIEW_STATE)
+
+  // Simulation config
+  const initSimulationConfig: SimulationConfig = {
+    start: false,
+    startTime: undefined,
+    endTime: undefined,
+  }
+  const [simulationConfig, setSimulationConfig] = useState<SimulationConfig>(initSimulationConfig)
+
+  // List of vehicles in simulator
+  const [vehicles, setVehicles] = useState<Vehicle[]>([])
+
+  const vehiclesRef = useRef(vehicles)
+
+  useEffect(() => {
+    vehiclesRef.current = vehicles
+  }, [vehicles])
+
+  // Simulation time
+  const [simulationTime, setSimulationTime] = useState(dayjs())
+
+  useEffect(() => {
+
+    console.log("change in simulationConfig", simulationConfig)
+    console.log("vehicles", vehicles)
+
+    if (simulationConfig.start) {
+      const clockInterval = setInterval(() => {
+        setSimulationTime(prevTime => {
+          const currentTime = prevTime.add(1, 'minute')
+
+          if (currentTime.isAfter(simulationConfig.endTime)) {
+            setSimulationConfig(v => ({...v, start: false}))
+            return prevTime
+          }
+
+          return currentTime 
+        }) // Advances 1 minute per interval
+      }, MS_PER_MINUTE_SIMULATION)
+
+      return () => {
+        clearInterval(clockInterval)
+      }  
+
+    }    
+
+  }, [simulationConfig])
+
+  const latestSimulationTime = useRef(simulationTime) 
+
+  useEffect(() => {
+    latestSimulationTime.current = simulationTime
+  }, [simulationTime])
+
+  // Calculate heading angle
+  const getHeading = useCallback((prevPos: number[], currentPos: number[]) => {
+    if (!prevPos) return 0
+    const [x1, y1] = prevPos
+    const [x2, y2] = currentPos
+    return Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI
+  }, [])
+
+  useEffect(() => {
+    // Animation progression
+
+    const fps = 60 
+    const msPerAnimationStep = MS_PER_MINUTE_SIMULATION / fps 
+    const msSimPerMs = 60000 / MS_PER_MINUTE_SIMULATION
+    const msSimPerAnimationStep = msPerAnimationStep * msSimPerMs
+
+    if (simulationConfig.start) {
+      const animationInterval = setInterval(() => {
+
+        setVehicles([
+          ...vehiclesRef.current.map(vehicle => {
+
+            let newVehicleHeading = vehicle.run.heading
+            let newVehiclePosition = vehicle.run.position
+            let newVehicleRunProgression = vehicle.run.progression
+            let lastStepIndex = vehicle.steps.length - 1
+
+            const initTime = vehicle.steps[0].destination.time
+
+            // Only executed on this vehicle time window
+            if (
+              latestSimulationTime.current.diff(initTime) >= 0 && 
+              latestSimulationTime.current.diff(vehicle.steps[lastStepIndex].destination.time) <= 0 
+            ){
+              // Update animation
+              let newVehiclePositionUpdated = false
+
+              // Traversing steps and step routes to get recent route position
+              vehicle.steps.map((step, stepIndex) => {
+                // console.log(`vehicle ${vehicle.id} stepIndex ${stepIndex} ${step.vehicleProgressionMS.length} runProgression ${newVehicleRunProgression}`)
+                
+                step.vehicleProgressionMS.map((progress, progressIndex) => {
+                  // console.log(`progress ${progress}`)
+
+                  if (newVehicleRunProgression >= progress) {
+                    const nextProgress = step.vehicleProgressionMS[progressIndex + 1]
+                    const currentRoutePosition = step.routes[progressIndex]
+                    const nextRoutePosition = step.routes[progressIndex + 1]
+
+                    const nextStep = vehicle.steps[stepIndex + 1]
+                    const nextProgressOnNextStep = nextStep ? nextStep.vehicleProgressionMS[0] : undefined 
+                    const nextRoutePositionOnNextStep = nextStep ? nextStep.routes[0] : undefined
+
+                    
+                    // Next route position in same step exists: vehicle Position  
+                    if (nextProgress && nextProgress > newVehicleRunProgression) {
+
+                      // console.log(`Got it current to next position`, progressIndex, currentRoutePosition, nextRoutePosition)
+                      const ratio = (newVehicleRunProgression - progress) / (nextProgress - progress)
+                      const long = currentRoutePosition[0] + (ratio * (nextRoutePosition[0] - currentRoutePosition[0]))
+                      const lat = currentRoutePosition[1] + (ratio * (nextRoutePosition[1] - currentRoutePosition[1]))
+
+                      const prevPosition = newVehiclePosition
+                      newVehiclePosition = [long, lat]
+                      newVehicleHeading = getHeading([prevPosition[0], prevPosition[1]], [newVehiclePosition[0], newVehiclePosition[1]])
+                      
+                    } else if (nextProgressOnNextStep && nextRoutePositionOnNextStep && nextProgressOnNextStep > newVehicleRunProgression) {
+
+                      // console.log(`Got it current to next position in next step`, progressIndex, currentRoutePosition, nextRoutePositionOnNextStep)
+                      const ratio = (newVehicleRunProgression - progress) / (nextProgressOnNextStep - progress)
+                      const long = currentRoutePosition[0] + (ratio * (nextRoutePositionOnNextStep[0] - currentRoutePosition[0]))
+                      const lat = currentRoutePosition[1] + (ratio * (nextRoutePositionOnNextStep[1] - currentRoutePosition[1]))
+
+                      const prevPosition = newVehiclePosition
+                      newVehiclePosition = [long, lat]
+                      newVehicleHeading = getHeading([prevPosition[0], prevPosition[1]], [newVehiclePosition[0], newVehiclePosition[1]])
+
+                    } else {
+
+                      // console.log(`Got it from current position`, progressIndex, currentRoutePosition)
+                      const prevPosition = newVehiclePosition
+                      newVehiclePosition = currentRoutePosition
+                      newVehicleHeading = getHeading([prevPosition[0], prevPosition[1]], [newVehiclePosition[0], newVehiclePosition[1]])
+
+                    }
+
+                    // Next route position in different step exists
+                    // No next route position: vehicle Position same with this route position
+                  }
+                  
+                  
+                })
+              })
+
+              /**
+              *
+              * 1. Get and update progression for each vehicle 
+              * 2. Get the current step info
+              * 3. Calculate distance form step initial position
+              *   3.1. Get total distance of each step (maybe you could just calculate it since beginning)
+              *   3.2. Get total duration of each step
+              *   3.3. Get distance from step initial position to progress position
+              *   3.4. Traverse each points until arrive past the last point
+              *   3.5. Infer position between last point to next point based on the remaining distance
+              * 4. Traverse the position
+              */
+
+            }
+
+            newVehicleRunProgression += msSimPerAnimationStep
+            // console.log(">>> newProgression become", newVehicleRunProgression)
+
+            return {
+              ...vehicle,
+              run: {
+                ...vehicle.run,
+                position: newVehiclePosition,
+                heading: newVehicleHeading,
+                progression: newVehicleRunProgression,
+              },
+            }
+          })
+        ])
+
+      }, msPerAnimationStep)
+
+      return () => clearInterval(animationInterval)
+    }
+
+  }, [simulationConfig])
 
   // App menus visibiliy config 
   const [show, setShow] = useState({
@@ -89,8 +305,113 @@ const SimulatorBasic = ({
     datasetImporter: false,
   })
 
-  // List of vehicles in simulator
-  const [vehicles, setVehicles] = useState<Vehicle[]>([])
+  /* -------------------- VEHICLE STATE -------------------- */
+
+  const loadVehiclesFromLocal = async (): Promise<Vehicle[]> => {
+
+    let processedVehicles: Vehicle[] = []
+
+    const res = await localforage.getItem("vehicles")
+    
+    if (res) {
+
+      const vehiclesFromLocal: Vehicle[] = JSON.parse(res as string)
+      if (vehiclesFromLocal) {
+        processedVehicles = vehiclesFromLocal.map(vehicle => {
+
+          console.log("vehicle from file", vehiclesFromLocal)
+
+          let totalVehicleProgressionMS = 0
+
+          // Iterating Vehicle Steps
+          const steps = [...vehicle.steps.map((step, stepIndex) => {
+            const timeString = step.destination.time
+            let totalDistanceMeter = 0
+            let totalTimeMS = 0
+            let distanceProgression: number[] = []
+            let vehicleProgressionMS: number[] = []
+
+            if (stepIndex > 0 && step.type === "trip") {
+              const destinationTime = dayjs(step.destination.time) 
+              const previousDestinationTime = dayjs(vehicle.steps[stepIndex - 1].destination.time)
+
+              totalTimeMS = destinationTime ? destinationTime.diff(previousDestinationTime) : 0
+            }
+
+            // Iterating routes for distance
+            step.routes.forEach((route, routeIndex) => {
+
+              if (routeIndex > 0) {
+                const prevRoute = step.routes[routeIndex - 1]
+                totalDistanceMeter += turf.distance(
+                  turf.point([prevRoute[0], prevRoute[1]]),
+                  turf.point([route[0], route[1]]),
+                  {units: "meters"}
+                )
+              }
+
+              distanceProgression[routeIndex] = totalDistanceMeter
+            })
+
+            // Iterating routes for time
+            step.routes.forEach((route, routeIndex) => {
+
+              if (routeIndex > 0) {
+                const prevRoute = step.routes[routeIndex - 1]
+                const routeDistance = turf.distance(
+                  turf.point([prevRoute[0], prevRoute[1]]),
+                  turf.point([route[0], route[1]]),
+                  {units: "meters"}
+                )
+
+                totalVehicleProgressionMS += (routeDistance / totalDistanceMeter * totalTimeMS)
+              }
+
+              vehicleProgressionMS[routeIndex] = totalVehicleProgressionMS
+            })
+
+            const computedStep: VehicleStep = {
+              ...step,
+              destination: {
+                ...step.destination, 
+                time: timeString ? dayjs(timeString) : undefined 
+              },
+              totalTimeMS,
+              totalDistanceMeter,
+              distanceProgression,
+              vehicleProgressionMS,
+            }
+
+            return computedStep
+          })]
+
+          const computedVehicle = {
+            ...vehicle,
+            run: {
+              ...vehicle.run,
+              heading: 0,
+              progression: 0,
+            },
+            steps: steps,
+          }
+
+          console.log("computedVehicle", computedVehicle)
+
+          return computedVehicle
+        })
+      }
+    }
+
+    return processedVehicles
+  }
+
+  useEffect(() => {
+
+    loadVehiclesFromLocal().then(res => {
+      setVehicles(res)
+    })
+
+  }, [])
 
   // Temporary vehicle steps creation
   const resetStep: VehicleStep = {
@@ -99,14 +420,13 @@ const SimulatorBasic = ({
       position: [INITIAL_COORDINATES[0], INITIAL_COORDINATES[1]], 
     },
     routes: [],
+    totalTimeMS: 0,
+    totalDistanceMeter: 0,
+    distanceProgression: [],
+    vehicleProgressionMS: [],
   }
 
   const [tempStep, setTempStep] = useState<VehicleStep>(resetStep)
-
-  useEffect(() => {
-
-    console.log("tempStep", tempStep)
-  }, [tempStep])
 
   // Get selected vehicle
   const selectedVehicle = useMemo(
@@ -136,19 +456,26 @@ const SimulatorBasic = ({
           position: initialPosition,     
         },
         routes: [initialPosition],
+        totalTimeMS: 0,
+        totalDistanceMeter: 0,
+        distanceProgression: [],
+        vehicleProgressionMS: [],
       }
 
-      const output = ([
+      const output: Vehicle[] = ([
         ...v.map(w => {
           w.selected = false
           return w
         }),
         {
           id: vehicles.length + 1,
-          initialPosition: initialPosition,
           steps: [newVehicleStep],
-          heading: 0,
           selected: true,
+          run: {
+            position: initialPosition,
+            heading: 0,
+            progression: 0,
+          }
         }
       ])
 
@@ -182,15 +509,7 @@ const SimulatorBasic = ({
           transitionDuration: 200,
           transitionInterpolator: new FlyToInterpolator(),
         }))
-      } else {
-        setViewState(w => ({
-          ...w,
-          longitude: v[index].initialPosition[0],
-          latitude: v[index].initialPosition[1],
-          transitionDuration: 200,
-          transitionInterpolator: new LinearInterpolator(),
-        }))
-      }
+      } 
 
       return [
         ...v.slice(0, index).map(w => ({...w, selected: false})),
@@ -218,6 +537,10 @@ const SimulatorBasic = ({
               position: tempStep.routes[tempStep.routes.length - 1],
             },
             routes: tempStep.routes,
+            totalDistanceMeter: 0,
+            totalTimeMS: 0,
+            distanceProgression: [],
+            vehicleProgressionMS: [],
           }
         ]
       }
@@ -237,12 +560,13 @@ const SimulatorBasic = ({
 
       if (currentDestinationTime) {
         const newDestinationTime = currentDestinationTime.add(minute, "minute")
-        console.log("newDestionationTime", newDestinationTime)
+        // console.log("newDestionationTime", newDestinationTime)
         setTempStep(v => ({...v, destination: {...v.destination, time: newDestinationTime}}))
       }
     }
   } 
 
+  // Get temporary step time delta
   const tempStepTimeDelta = useMemo(
     () => {
 
@@ -281,14 +605,10 @@ const SimulatorBasic = ({
         // Add latest point as initial path
         if (current.routes.length === 0) {
 
-          if (selectedVehicle.steps.length === 0) {
-            initPath.push(selectedVehicle.initialPosition)
-          } else {
-            const latestStep = selectedVehicle.steps[selectedVehicle.steps.length - 1]
-            const latestPosition = latestStep.routes[latestStep.routes.length - 1]
-            if (latestPosition) {
-              initPath.push(latestPosition)
-            }
+          const latestStep = selectedVehicle.steps[selectedVehicle.steps.length - 1]
+          const latestPosition = latestStep.routes[latestStep.routes.length - 1]
+          if (latestPosition) {
+            initPath.push(latestPosition)
           }
           
         }
@@ -307,6 +627,76 @@ const SimulatorBasic = ({
     }
 
   }
+
+  /* -------------------- ANIMATING VEHICLES -------------------- */
+
+  const restartSimulation = () => {
+
+
+    let startTime: Dayjs | undefined
+    let endTime: Dayjs | undefined
+
+    vehicles.forEach(vehicle => {
+      vehicle.steps.forEach(step => {
+        if (!startTime) startTime = step.destination.time
+        if (!endTime) endTime = step.destination.time
+
+        if (step.destination.time?.isBefore(startTime)) {
+          startTime = step.destination.time
+        }
+
+        if (step.destination.time?.isAfter(endTime)) {
+          endTime = step.destination.time
+        }
+      })
+    }) 
+
+
+    setSimulationConfig(prev => {
+
+      if (startTime) setSimulationTime(startTime)
+
+      localforage.setItem("vehicles", JSON.stringify(vehicles)).then(() => {})
+
+      return {
+        ...prev,
+        start: true,
+        startTime: startTime,
+        endTime: endTime,
+      }
+    })
+
+  }
+
+  /*
+   * The main ideas is utilising 60 fps and dynamically update car position,
+   *  it's recalculated every 5 minute iteration in the previous program
+   *
+   * 1. Run the simulation time
+   * 2. For each vehicle: 
+   *    - Every time the simulation time changed
+   *
+   *
+   *
+   * 1. Get earliest minute
+   * 2. Get latest minute 
+   * 3. Breakdown vehicles 
+   *    - vehicle
+   *      - linestring per minute []
+   *      - steps
+   *        - step
+   *          - minute start 
+   *          - total distance
+   *          - minute end
+   *          - distance per minute
+   *          - linestring
+   *            - points
+   *            - distance between two points
+   *            - add new point every 1 minute 
+   *            - add to linestring per minute []
+  */
+
+  /* -------------------- LAYERS -------------------- */
 
   // Basemap layer using Open Street Map service
   const tileLayer = new TileLayer<ImageBitmap>({
@@ -424,13 +814,14 @@ const SimulatorBasic = ({
     new ScatterplotLayer<Vehicle>({
       id: 'car-highlight-layer',
       data: vehicles.filter(v => v.selected),
-      getPosition: d => d.steps.length === 0 ? d.initialPosition : d.steps[d.steps.length - 1].destination.position,
+      getPosition: d => d.steps[d.steps.length - 1].destination.position,
       getRadius: 40,
+      visible: simulationConfig.start === false,
       radiusUnits: "pixels",
       getFillColor: show.vectorBgMap ? [163, 230, 53, 100] : [77, 124, 15, 100],
     }),
     new IconLayer<Vehicle>({
-      id: 'car-layer',
+      id: 'simulation-car-layer',
       data: vehicles,
       getIcon: () => ({
         url: '/car-icon.png',
@@ -438,9 +829,26 @@ const SimulatorBasic = ({
         height: 486/5,
         anchorY: 64  // Adjust based on your icon
       }),
-      getPosition: d => d.steps.length === 0 ? d.initialPosition : d.steps[d.steps.length - 1].destination.position,
+      visible: simulationConfig.start === true,
+      getPosition: d => d.run.position,
+      getSize: 16,  // Adjust size as needed
+      getAngle: d => d.run.heading - 0 + 180,  // Subtract 90 to align icon properly
+      sizeScale: 1,
+      sizeUnits: 'pixels',
+    }),
+    new IconLayer<Vehicle>({
+      id: 'drawn-car-layer',
+      data: vehicles,
+      getIcon: () => ({
+        url: '/car-icon.png',
+        width: 1157/5,
+        height: 486/5,
+        anchorY: 64  // Adjust based on your icon
+      }),
+      visible: simulationConfig.start === false,
+      getPosition: d => d.steps[d.steps.length - 1].destination.position,
       getSize: 20,  // Adjust size as needed
-      getAngle: d => d.heading - 0 + 180,  // Subtract 90 to align icon properly
+      getAngle: () => 0,  // Subtract 90 to align icon properly
       sizeScale: 1,
       sizeUnits: 'pixels',
     }),
@@ -454,6 +862,7 @@ const SimulatorBasic = ({
       ],
       getPath: d => d.path,
       getColor: [255, 0, 0],
+      visible: simulationConfig.start === false,
       lineWidthUnits: "pixels",
       widthMinPixels: 4,
       getLineWidth: 4,
@@ -462,12 +871,15 @@ const SimulatorBasic = ({
       id: 'drawn-vehicle-steps-layer', // Unique by vehicle by steps
       data: vehiclePath,
       getPath: d => d.routes,
+      visible: simulationConfig.start === false,
       getColor: show.vectorBgMap ? [163, 230, 53, 255] : [77, 124, 15, 255],
       lineWidthUnits: "pixels",
       widthMinPixels: 4,
       getLineWidth: 2,
     }),
   ]
+
+  /* -------------------- RENDERS -------------------- */
 
   return (
     <div className="w-full min-h-screen relative bg-slate-900">
@@ -491,7 +903,6 @@ const SimulatorBasic = ({
         >
           {show.datasetGenerator ? <FaCheckSquare /> : <FaSquare />} Generate Data  
         </button>
-        {/*
         <button
           onClick={() => setShow(v => ({...v, datasetImporter: !v.datasetImporter}))}
           className={`${tailwindStyles.button.basic}`}
@@ -503,7 +914,6 @@ const SimulatorBasic = ({
         >
           Suggestion Form
         </button>
-        */}
       </div>
 
 
@@ -591,6 +1001,53 @@ const SimulatorBasic = ({
 
         {/* Vehicles title and menu */}
         <div className="flex flex-col gap-2 px-4">
+          {vehicles.flatMap(x => x.steps).length > 0 &&
+            <div className="flex flex-col gap-2">
+
+              <div className="flex flex-row justify-between text-xs">
+                <div>
+                  {simulationConfig.startTime?.format("HH:mm, D MMM YY")}
+                </div>
+                <div>
+                  {simulationConfig.endTime?.format("HH:mm, D MMM YY")}
+                </div>
+              </div>
+
+              <div className="flex flex-row justify-center text-sm font-bold items-center">
+                {simulationTime.format("HH:mm, D MMM YY")}
+              </div>
+
+              <div className="flex flex-row gap-2">
+                <button
+                  onClick={restartSimulation}
+                  className={`${tailwindStyles.button.basic} grow`}
+                >
+                  Run Simulation <FaPlay />
+                </button>
+                <button
+                  onClick={() => setSimulationConfig(v => ({...v, start: false}))}
+                  className={`${tailwindStyles.button.basic}`}
+                >
+                  <FaStop />
+                </button>
+                <button
+                  onClick={restartSimulation}
+                  className={`${tailwindStyles.button.basic}`}
+                >
+                  <FaArrowRotateRight />
+                </button>
+
+                <button
+                  onClick={() => localforage.clear()}
+                  className={`${tailwindStyles.button.basic}`}
+                >
+                  <FaTrash />
+                </button>
+                {/*
+                */}
+              </div>
+            </div>
+          }
           <h1 className="font-semibold">Dataset Generator</h1>
           <div className="flex flex-row justify-between items-center">
             <h2 className="font-semibold text-sm">Vehicles</h2>
