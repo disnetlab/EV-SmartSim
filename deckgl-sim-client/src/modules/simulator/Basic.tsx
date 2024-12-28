@@ -105,7 +105,8 @@ const SimulatorBasic = ({
 }) => {
 
   /* -------------------- SIMULATOR STATE -------------------- */
-  const MS_PER_MINUTE_SIMULATION = 500
+  const MS_PER_MINUTE_SIMULATION = 10000
+  const FRAME_PER_SECOND = 5
 
   // Simulator step
   const [appStep, setAppStep] = useState<AppStep>("normal")
@@ -166,18 +167,32 @@ const SimulatorBasic = ({
     latestSimulationTime.current = simulationTime
   }, [simulationTime])
 
-  // Calculate heading angle
-  const getHeading = useCallback((prevPos: number[], currentPos: number[]) => {
-    if (!prevPos) return 0
-    const [x1, y1] = prevPos
-    const [x2, y2] = currentPos
-    return Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI
-  }, [])
+const getHeading = (
+  prevPos: [number, number],
+  currentPos: [number, number],
+  vehicleID: number
+): number => {
+  if (!prevPos || !currentPos) return 0 
+
+  const [long1, lat1] = prevPos
+  const [long2, lat2] = currentPos
+
+  const northPoint = [long1, lat1 + 0.001] 
+
+  let angle = 0
+  angle = turf.angle(northPoint, prevPos, currentPos)
+
+  console.log(
+    `getHeading vehicle ${vehicleID} prev: ${prevPos}, current: ${currentPos}, heading: ${angle}`
+  )
+
+  return angle 
+}
 
   useEffect(() => {
     // Animation progression
 
-    const fps = 60 
+    const fps = FRAME_PER_SECOND
     const msPerAnimationStep = MS_PER_MINUTE_SIMULATION / fps 
     const msSimPerMs = 60000 / MS_PER_MINUTE_SIMULATION
     const msSimPerAnimationStep = msPerAnimationStep * msSimPerMs
@@ -230,7 +245,8 @@ const SimulatorBasic = ({
 
                       const prevPosition = newVehiclePosition
                       newVehiclePosition = [long, lat]
-                      newVehicleHeading = getHeading([prevPosition[0], prevPosition[1]], [newVehiclePosition[0], newVehiclePosition[1]])
+                      newVehicleHeading = getHeading([prevPosition[0], prevPosition[1]], [newVehiclePosition[0], newVehiclePosition[1]], vehicle.id)
+                      newVehiclePositionUpdated = true
                       
                     } else if (nextProgressOnNextStep && nextRoutePositionOnNextStep && nextProgressOnNextStep > newVehicleRunProgression) {
 
@@ -241,21 +257,22 @@ const SimulatorBasic = ({
 
                       const prevPosition = newVehiclePosition
                       newVehiclePosition = [long, lat]
-                      newVehicleHeading = getHeading([prevPosition[0], prevPosition[1]], [newVehiclePosition[0], newVehiclePosition[1]])
+                      newVehicleHeading = getHeading([prevPosition[0], prevPosition[1]], [newVehiclePosition[0], newVehiclePosition[1]], vehicle.id)
+                      newVehiclePositionUpdated = true
 
                     } else {
 
                       // console.log(`Got it from current position`, progressIndex, currentRoutePosition)
                       const prevPosition = newVehiclePosition
                       newVehiclePosition = currentRoutePosition
-                      newVehicleHeading = getHeading([prevPosition[0], prevPosition[1]], [newVehiclePosition[0], newVehiclePosition[1]])
+                      newVehicleHeading = getHeading([prevPosition[0], prevPosition[1]], [newVehiclePosition[0], newVehiclePosition[1]], vehicle.id)
+                      newVehiclePositionUpdated = true
 
                     }
 
                     // Next route position in different step exists
                     // No next route position: vehicle Position same with this route position
                   }
-                  
                   
                 })
               })
@@ -276,6 +293,7 @@ const SimulatorBasic = ({
             }
 
             newVehicleRunProgression += msSimPerAnimationStep
+                  
             // console.log(">>> newProgression become", newVehicleRunProgression)
 
             return {
@@ -825,14 +843,14 @@ const SimulatorBasic = ({
       data: vehicles,
       getIcon: () => ({
         url: '/car-icon.png',
-        width: 1157/5,
-        height: 486/5,
+        width: 486/5,
+        height: 1157/5,
         anchorY: 64  // Adjust based on your icon
       }),
       visible: simulationConfig.start === true,
       getPosition: d => d.run.position,
-      getSize: 16,  // Adjust size as needed
-      getAngle: d => d.run.heading - 0 + 180,  // Subtract 90 to align icon properly
+      getSize: 32,  // Adjust size as needed
+      getAngle: d => d.run.heading,  // Subtract 90 to align icon properly
       sizeScale: 1,
       sizeUnits: 'pixels',
     }),
@@ -841,13 +859,13 @@ const SimulatorBasic = ({
       data: vehicles,
       getIcon: () => ({
         url: '/car-icon.png',
-        width: 1157/5,
-        height: 486/5,
+        width: 486/5,
+        height: 1157/5,
         anchorY: 64  // Adjust based on your icon
       }),
       visible: simulationConfig.start === false,
       getPosition: d => d.steps[d.steps.length - 1].destination.position,
-      getSize: 20,  // Adjust size as needed
+      getSize: 40,  // Adjust size as needed
       getAngle: () => 0,  // Subtract 90 to align icon properly
       sizeScale: 1,
       sizeUnits: 'pixels',
