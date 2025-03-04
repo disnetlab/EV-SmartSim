@@ -1,12 +1,20 @@
-import { createHashRouter } from "react-router-dom"
-import SimulatorBasic from "./modules/simulator/Basic"
+import { createHashRouter } from "react-router-dom";
+import SimulatorCSVInput from "./modules/simulator/CSVInput/CSVInput";
 
 const router = createHashRouter([
   {
     path: "/",
-    index: true,
-    element: <SimulatorBasic />,
+    children: [
+      {
+        index: true,
+        element: <SimulatorCSVInput />,
+      },
+      {
+        path: "csv",
+        element: <SimulatorCSVInput />,
+      },
+    ],
   },
-])
+]);
 
-export default router 
+export default router;

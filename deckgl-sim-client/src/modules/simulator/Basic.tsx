@@ -12,20 +12,20 @@ import DeckGL, {
   TileLayer
 } from "deck.gl"
 import { PathStyleExtension } from "@deck.gl/extensions"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { FaCheckSquare, FaSquare, FaTimes } from "react-icons/fa"
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react"
+import { FaTimes } from "react-icons/fa"
 import dayjs, { Dayjs } from "dayjs"
-import { FaArrowRotateRight, FaCheck, FaDeleteLeft, FaPlay, FaPlus, FaStop, FaTrash } from "react-icons/fa6"
+import { FaArrowRotateRight, FaCheck, FaPlay, FaPlus, FaStop, FaTrash, FaUpload } from "react-icons/fa6"
 import { point, distance } from "@turf/turf"
 import DatePicker from "react-datepicker"
 import 'react-datepicker/dist/react-datepicker.css'
 import localforage from "localforage"
 import * as turf from "@turf/turf"
-import * as wkt from "wellknown"
 
 const tailwindStyles = {
   button: {
     basic: `flex flex-row py-1 px-2 gap-2 bg-slate-200 hover:bg-slate-300 rounded items-center text-xs justify-center`,
+    selected: `flex flex-row py-1 px-2 gap-2 bg-lime-200 hover:bg-lime-300 rounded items-center text-xs justify-center`,
     big: `flex flex-row py-2 px-4 gap-2 bg-slate-200 hover:bg-slate-300 rounded items-center text-lg justify-center`,
   },
   input: {
@@ -69,6 +69,7 @@ interface VehicleStep {
     position: Position 
     time?: Dayjs
   }
+  soc: number 
   totalDistanceMeter: number
   totalTimeMS: number
   routes: Position[]
@@ -77,7 +78,9 @@ interface VehicleStep {
 }
 
 interface Vehicle {
-  id: number,
+  id: number
+  label: string
+  batteryCapacityKWH: number
   steps: VehicleStep[]
   run: {
     progression: number
@@ -105,8 +108,8 @@ const SimulatorBasic = ({
 }) => {
 
   /* -------------------- SIMULATOR STATE -------------------- */
-  const MS_PER_MINUTE_SIMULATION = 10000
-  const FRAME_PER_SECOND = 5
+  const MS_PER_MINUTE_SIMULATION = 1000
+  const FRAME_PER_SECOND = 60
 
   // Simulator step
   const [appStep, setAppStep] = useState<AppStep>("normal")
@@ -135,9 +138,6 @@ const SimulatorBasic = ({
   const [simulationTime, setSimulationTime] = useState(dayjs())
 
   useEffect(() => {
-
-    console.log("change in simulationConfig", simulationConfig)
-    console.log("vehicles", vehicles)
 
     if (simulationConfig.start) {
       const clockInterval = setInterval(() => {
@@ -175,7 +175,6 @@ const getHeading = (
   if (!prevPos || !currentPos) return 0 
 
   const [long1, lat1] = prevPos
-  const [long2, lat2] = currentPos
 
   const northPoint = [long1, lat1 + 0.001] 
 
@@ -319,7 +318,7 @@ const getHeading = (
   const [show, setShow] = useState({
     tileBgMap: true,
     vectorBgMap: false,
-    datasetGenerator: true,
+    datasetGenerator: false,
     datasetImporter: false,
   })
 
@@ -437,6 +436,7 @@ const getHeading = (
     destination: {
       position: [INITIAL_COORDINATES[0], INITIAL_COORDINATES[1]], 
     },
+    soc: 100,
     routes: [],
     totalTimeMS: 0,
     totalDistanceMeter: 0,
@@ -478,6 +478,7 @@ const getHeading = (
         totalDistanceMeter: 0,
         distanceProgression: [],
         vehicleProgressionMS: [],
+        soc: 100,
       }
 
       const output: Vehicle[] = ([
@@ -487,6 +488,8 @@ const getHeading = (
         }),
         {
           id: vehicles.length + 1,
+          label: `Vehicle ${vehicles.length + 1}`,
+          batteryCapacityKWH: 40,
           steps: [newVehicleStep],
           selected: true,
           run: {
@@ -549,6 +552,7 @@ const getHeading = (
         d.steps = [
           ...d.steps,
           {
+            soc: 100,
             type: "trip", 
             destination: {
               time: tempStep.destination.time,
@@ -897,6 +901,12 @@ const getHeading = (
     }),
   ]
 
+  const vehiclesImportInputButtonRef = useRef<HTMLInputElement | null>(null)
+  const stepsImportInputButtonRef = useRef<HTMLInputElement | null>(null)
+
+  const handleFileImport = (event: ChangeEvent<HTMLInputElement>, type: "vehicles" | "steps") => {
+  }
+
   /* -------------------- RENDERS -------------------- */
 
   return (
@@ -909,29 +919,46 @@ const getHeading = (
         ${appStep === "normal" ? 'top-0' : '-top-20'}`}
       >
         <h1 className="font-semibold mr-2">EV-SmartSim</h1>
-        <button
-          onClick={() => setShow(v => ({...v, vectorBgMap: !v.vectorBgMap}))}
-          className={`${tailwindStyles.button.basic}`}
-        >
-          {show.vectorBgMap ? <FaCheckSquare /> : <FaSquare />} Vector Map  
-        </button>
-        <button
-          onClick={() => setShow(v => ({...v, datasetGenerator: !v.datasetGenerator}))}
-          className={`${tailwindStyles.button.basic}`}
-        >
-          {show.datasetGenerator ? <FaCheckSquare /> : <FaSquare />} Generate Data  
-        </button>
-        <button
-          onClick={() => setShow(v => ({...v, datasetImporter: !v.datasetImporter}))}
-          className={`${tailwindStyles.button.basic}`}
-        >
-          {show.datasetImporter ? <FaCheckSquare /> : <FaSquare />} Import Data  
-        </button>
-        <button
-          className={`${tailwindStyles.button.basic}`}
-        >
-          Suggestion Form
-        </button>
+        <div className="flex flex-row p-1 px-2 rounded bg-slate-700 gap-2 items-center text-xs">
+          <span className="text-slate-100">Dataset</span>
+          <button
+            onClick={() => setShow(v => ({...v, datasetGenerator: true}))}
+            className={show.datasetGenerator ? tailwindStyles.button.selected : tailwindStyles.button.basic}
+          >
+            Generate
+          </button>
+          <button
+            onClick={() => setShow(v => ({...v, datasetGenerator: false}))}
+            className={show.datasetGenerator ? tailwindStyles.button.basic : tailwindStyles.button.selected}
+          >
+            Import
+          </button>
+        </div>
+        {/*
+          <button
+            onClick={() => setShow(v => ({...v, vectorBgMap: !v.vectorBgMap}))}
+            className={`${tailwindStyles.button.basic}`}
+          >
+            {show.vectorBgMap ? <FaCheckSquare /> : <FaSquare />} Vector Map  
+          </button>
+          <button
+            onClick={() => setShow(v => ({...v, datasetGenerator: !v.datasetGenerator}))}
+            className={`${tailwindStyles.button.basic}`}
+          >
+            {show.datasetGenerator ? <FaCheckSquare /> : <FaSquare />} Generate Data  
+          </button>
+          <button
+            onClick={() => setShow(v => ({...v, datasetImporter: !v.datasetImporter}))}
+            className={`${tailwindStyles.button.basic}`}
+          >
+            {show.datasetImporter ? <FaCheckSquare /> : <FaSquare />} Import Data  
+          </button>
+          <button
+            className={`${tailwindStyles.button.basic}`}
+          >
+            Suggestion Form
+          </button>
+        */}
       </div>
 
 
@@ -1014,11 +1041,11 @@ const getHeading = (
       <div
         id="sidebar-dataset-generator"
         className={`flex flex-col gap-4 fixed h-screen overflow-y-auto pb-8 bg-white transition-all w-[20rem]
-        ${show.datasetGenerator && (appStep === "normal") ? '' : '-ml-[20rem]'} shadow z-20 pt-12`}
+        ${(appStep === "normal") ? '' : '-ml-[20rem]'} shadow z-20 pt-12`}
       >
 
         {/* Vehicles title and menu */}
-        <div className="flex flex-col gap-2 px-4">
+        <div className="flex flex-col gap-2 px-4 pt-4">
           {vehicles.flatMap(x => x.steps).length > 0 &&
             <div className="flex flex-col gap-2">
 
@@ -1066,20 +1093,59 @@ const getHeading = (
               </div>
             </div>
           }
-          <h1 className="font-semibold">Dataset Generator</h1>
-          <div className="flex flex-row justify-between items-center">
-            <h2 className="font-semibold text-sm">Vehicles</h2>
-            <button
-              onClick={() => setAppStep("addVehicle")}
-              className={`${tailwindStyles.button.basic}`}
-            >
-              <FaPlus /> Vehicle
-            </button>
-          </div>
+          {show.datasetGenerator &&
+            <div className="flex flex-col gap-2">
+              <h1 className="font-semibold">Dataset Generator</h1>
+              <div className="flex flex-row justify-between items-center">
+                <button
+                  onClick={() => setAppStep("addVehicle")}
+                  className={`${tailwindStyles.button.basic}`}
+                >
+                  <FaPlus /> Vehicle
+                </button>
+              </div>
+            </div>
+          }
+          {!show.datasetGenerator &&
+            <div className="flex flex-col gap-2">
+              <h1 className="font-semibold">Dataset Importer</h1>
+              <div className="flex flex-row items-center gap-2 justify-center">
+                <button
+                  onClick={() => {
+                    vehiclesImportInputButtonRef.current?.click()
+                  }}
+                  className={`${tailwindStyles.button.basic}`}
+                >
+                  <FaUpload /> Import Vehicles 
+                </button>
+                <button
+                  onClick={() => {
+                    stepsImportInputButtonRef.current?.click()
+                  }}
+                  className={`${tailwindStyles.button.basic}`}
+                >
+                  <FaUpload /> Import Steps
+                </button>
+                <input
+                  type="file"
+                  accept=".csv"
+                  className="hidden"
+                  ref={vehiclesImportInputButtonRef}
+                />
+                <input
+                  type="file"
+                  accept=".csv"
+                  className="hidden"
+                  ref={stepsImportInputButtonRef}
+                />
+              </div>
+            </div>
+          }
         </div>
 
         {/* List of vehicles */}
         <div className="flex flex-col">
+          <h1 className="font-semibold px-4">Vehicle List</h1>
           {[vehicles.map((d, i) => {
             return (
               <div
@@ -1092,34 +1158,36 @@ const getHeading = (
                 </h3> 
                 <div className="flex flex-row justify-between text-xs items-center">
                   <h4 className="font-semibold">Total steps: {d.steps.length}</h4> 
-                  <div className="flex flex-row items-center">
-                    <FaPlus className="mr-2" /> 
-                    <button
-                      onClick={() => {
-                        selectVehicleByIndex(i)
-                        setAppStep("addVehicleRoute")
-                      }}
-                      className={`${tailwindStyles.button.basic} rounded-none gap-1 text-xs`}
-                    >
-                      Trip 
-                    </button>
-                    <button
-                      onClick={() => {
-                        selectVehicleByIndex(i)
-                      }}
-                      className={`${tailwindStyles.button.basic} rounded-none gap-1 text-xs`}
-                    >
-                      CDC 
-                    </button>
-                    <button
-                      onClick={() => {
-                        selectVehicleByIndex(i)
-                      }}
-                      className={`${tailwindStyles.button.basic} rounded-none gap-1 text-xs`}
-                    >
-                      Stop 
-                    </button>
-                  </div>
+                  {show.datasetGenerator &&
+                    <div className="flex flex-row items-center">
+                      <FaPlus className="mr-2" /> 
+                      <button
+                        onClick={() => {
+                          selectVehicleByIndex(i)
+                          setAppStep("addVehicleRoute")
+                        }}
+                        className={`${tailwindStyles.button.basic} rounded-none gap-1 text-xs`}
+                      >
+                        Trip 
+                      </button>
+                      <button
+                        onClick={() => {
+                          selectVehicleByIndex(i)
+                        }}
+                        className={`${tailwindStyles.button.basic} rounded-none gap-1 text-xs`}
+                      >
+                        CDC 
+                      </button>
+                      <button
+                        onClick={() => {
+                          selectVehicleByIndex(i)
+                        }}
+                        className={`${tailwindStyles.button.basic} rounded-none gap-1 text-xs`}
+                      >
+                        Stop 
+                      </button>
+                    </div>
+                  }
                 </div> 
 
                 {/* List of steps of this vehicle */}

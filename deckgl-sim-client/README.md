@@ -1,24 +1,39 @@
-# Roadmap 
+# Roadmap
 
 Latest Demo: [ev-smartsim.pages.dev](https://ev-smartsim.pages.dev)
 
+## Use Case 2 - CSV Input
+1. User create 2 CSV files, app also cloud export the trip into these files
+    - Vehicle data
+      - id
+      - name
+    - Vehicle steps data
+      - vehicle_id
+      - step_type
+      - time_from
+      - time_to
+      - destination_long
+      - destination_lat
+      - soc
+      - routes (optional)
+
 ## Use Case 1 - Proof of Concept of Waypoint Breakdown
 1. User create dataset by creating steps
-    - Given 1 set of steps with zero element 
+    - Given 1 set of steps with zero element
         - User add vehicle
             - For each vehicle user add step
                 - Set initial position
                 - Select step type
                     - Init
                     - Stop with charging discharging
-                        - Use previous latest point location 
+                        - Use previous latest point location
                     - Stop without charging discharging
-                        - Use previous latest point location 
-                    - Trip 
+                        - Use previous latest point location
+                    - Trip
                         - Show Record Trip Route Buttom
                         - Click Record
-                        - First waypoint is defined by previous location 
-                        - Start to generate Trip Route by clicking on map 
+                        - First waypoint is defined by previous location
+                        - Start to generate Trip Route by clicking on map
                         - Click Stop Record
                 - Input time from
                 - Input time to
@@ -26,7 +41,7 @@ Latest Demo: [ev-smartsim.pages.dev](https://ev-smartsim.pages.dev)
 
 
 - ev current position need to be on radius R meters from charging station to be considered charged there
-- intelligent data format converter 
+- intelligent data format converter
 
 ### User Inputs
 - Vehicles
@@ -34,17 +49,17 @@ Latest Demo: [ev-smartsim.pages.dev](https://ev-smartsim.pages.dev)
     - Battery capacity
     - kWh battery usage per km
 - Stations (could be home / public station)
-    - Station ID 
+    - Station ID
     - Location
     - Charging speed kW
     - Charging price per kWH
     - Discharging speed kW
     - Discharging price per kWH
-- Vehicle steps consist of trip and charge 
-    - Vehicle ID 
+- Vehicle steps consist of trip and charge
+    - Vehicle ID
     - Start time
     - End time
-    - Start CDC 
+    - Start CDC
     - End CDC
     - Type
         - Trip
@@ -52,7 +67,7 @@ Latest Demo: [ev-smartsim.pages.dev](https://ev-smartsim.pages.dev)
     - Trip
         - Path
         - Distance
-    - Location 
+    - Location
     - SoC
 
 ### Process
@@ -65,8 +80,8 @@ Latest Demo: [ev-smartsim.pages.dev](https://ev-smartsim.pages.dev)
 - Simulation time break down from the data
     - Begin simulation time at index = 0
         - V1
-            - 0 : 12:00 
-            - 1 : 13:00 
+            - 0 : 12:00
+            - 1 : 13:00
         - V2
             - 0 : 12:35
             - 1 : 12:44
