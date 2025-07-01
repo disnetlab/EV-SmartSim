@@ -56,6 +56,46 @@ export const downloadVehicleDataAsCSV = (vehicles: Vehicle[]): void => {
 };
 
 /**
+ * Downloads Vehicle data as a JSON file.
+ *
+ * @param {Vehicle[]} vehicles An array of Vehicle objects.
+ */
+export const downloadVehicleDataAsJSON = (vehicles: Vehicle[]): void => {
+  if (!vehicles || vehicles.length === 0) {
+    console.warn("No vehicle data to download.");
+    return;
+  }
+
+  // Prepare the JSON data with proper serialization for Dayjs objects
+  const jsonData = vehicles.map((vehicle) => ({
+    ...vehicle,
+    steps: vehicle.steps.map((step) => ({
+      ...step,
+      destination: {
+        ...step.destination,
+        time: step.destination.time 
+          ? step.destination.time instanceof Date
+            ? step.destination.time.toISOString()
+            : (step.destination.time as Dayjs).toISOString()
+          : null
+      }
+    }))
+  }));
+
+  // Create JSON string with proper formatting
+  const jsonContent = JSON.stringify({ vehicles: jsonData }, null, 2);
+
+  // Create Blob
+  const jsonBlob = new Blob([jsonContent], {
+    type: "application/json;charset=utf-8",
+  });
+
+  // Download the file using FileSaver.js
+  const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+  saveAs(jsonBlob, `vehicle_data_${timestamp}.json`);
+};
+
+/**
  * Imports Vehicle and VehicleStep data from two separate CSV files.
  *
  * @param {File} vehicleFile The Vehicle data CSV file.

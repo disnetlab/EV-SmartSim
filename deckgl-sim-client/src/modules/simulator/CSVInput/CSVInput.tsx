@@ -31,7 +31,7 @@ import localforage, { LOCALSTORAGE } from "localforage";
 import * as turf from "@turf/turf";
 import Button from "../../../shared/ui/Button";
 import { Vehicle, VehicleStep } from "./interfaces";
-import { downloadVehicleDataAsCSV } from "./utils";
+import { downloadVehicleDataAsCSV, downloadVehicleDataAsJSON } from "./utils";
 import Papa from "papaparse";
 
 const tailwindStyles = {
@@ -123,7 +123,18 @@ const SimulatorBasic = ({
 
   useEffect(() => {
     vehiclesRef.current = vehicles;
+    console.log("VehiclesRef synchronized with vehicles state:", vehiclesRef.current);
   }, [vehicles]);
+
+  // Helper function to update vehicles with proper processing and ref sync
+  const updateVehiclesWithProcessing = (newVehicles: Vehicle[]) => {
+    const processedVehicles = processVehiclesForSimulation(newVehicles);
+    setVehicles(processedVehicles);
+    vehiclesRef.current = processedVehicles;
+    localforage.setItem("vehicles", JSON.stringify(processedVehicles));
+    setLatestRefreshDatetime(dayjs());
+    return processedVehicles;
+  };
 
   // Simulation time
   const [simulationTime, setSimulationTime] = useState(dayjs());
@@ -339,110 +350,117 @@ const SimulatorBasic = ({
   const [show, setShow] = useState({
     tileBgMap: true,
     vectorBgMap: false,
-    datasetGenerator: false,
     datasetImporter: false,
   });
 
+  // Dataset mode: 'generate' | 'import' | 'jsonapi'
+  const [datasetMode, setDatasetMode] = useState<'generate' | 'import' | 'jsonapi'>('import');
+  
+  // JSON API state
+  const [jsonApiUrl, setJsonApiUrl] = useState('');
+  const [jsonApiLoading, setJsonApiLoading] = useState(false);
+
   /* -------------------- VEHICLE STATE -------------------- */
 
-  const loadVehiclesFromLocal = async (): Promise<Vehicle[]> => {
-    let processedVehicles: Vehicle[] = [];
+  // Process vehicles to calculate all needed properties for simulation
+  const processVehiclesForSimulation = (rawVehicles: Vehicle[]): Vehicle[] => {
+    return rawVehicles.map((vehicle) => {
+      console.log("Processing vehicle", vehicle.id);
 
+      let totalVehicleProgressionMS = 0;
+
+      // Iterating Vehicle Steps
+      const steps = vehicle.steps.map((step, stepIndex) => {
+        const timeString = step.destination.time;
+        let totalDistanceMeter = 0;
+        let totalTimeMS = 0;
+        let distanceProgression: number[] = [];
+        let vehicleProgressionMS: number[] = [];
+
+        if (stepIndex > 0 && step.type === "trip") {
+          const destinationTime = dayjs(step.destination.time);
+          const previousDestinationTime = dayjs(
+            vehicle.steps[stepIndex - 1].destination.time,
+          );
+
+          totalTimeMS = destinationTime
+            ? destinationTime.diff(previousDestinationTime)
+            : 0;
+        }
+
+        // Iterating routes for distance
+        step.routes.forEach((route, routeIndex) => {
+          if (routeIndex > 0) {
+            const prevRoute = step.routes[routeIndex - 1];
+            totalDistanceMeter += turf.distance(
+              turf.point([prevRoute[0], prevRoute[1]]),
+              turf.point([route[0], route[1]]),
+              { units: "meters" },
+            );
+          }
+
+          distanceProgression[routeIndex] = totalDistanceMeter;
+        });
+
+        // Iterating routes for time
+        step.routes.forEach((route, routeIndex) => {
+          if (routeIndex > 0) {
+            const prevRoute = step.routes[routeIndex - 1];
+            const routeDistance = turf.distance(
+              turf.point([prevRoute[0], prevRoute[1]]),
+              turf.point([route[0], route[1]]),
+              { units: "meters" },
+            );
+
+            totalVehicleProgressionMS +=
+              (routeDistance / totalDistanceMeter) * totalTimeMS;
+          }
+
+          vehicleProgressionMS[routeIndex] = totalVehicleProgressionMS;
+        });
+
+        const computedStep: VehicleStep = {
+          ...step,
+          destination: {
+            ...step.destination,
+            time: timeString ? dayjs(timeString) : undefined,
+          },
+          totalTimeMS,
+          totalDistanceMeter,
+          distanceProgression,
+          vehicleProgressionMS,
+        };
+
+        return computedStep;
+      });
+
+      const computedVehicle = {
+        ...vehicle,
+        run: {
+          ...vehicle.run,
+          heading: 0,
+          progression: 0,
+        },
+        steps: steps,
+      };
+
+      console.log("Processed vehicle", computedVehicle);
+      return computedVehicle;
+    });
+  };
+
+  const loadVehiclesFromLocal = async (): Promise<Vehicle[]> => {
     const res = await localforage.getItem("vehicles");
 
     if (res) {
       const vehiclesFromLocal: Vehicle[] = JSON.parse(res as string);
       if (vehiclesFromLocal) {
-        processedVehicles = vehiclesFromLocal.map((vehicle) => {
-          console.log("vehicle from file", vehiclesFromLocal);
-
-          let totalVehicleProgressionMS = 0;
-
-          // Iterating Vehicle Steps
-          const steps = [
-            ...vehicle.steps.map((step, stepIndex) => {
-              const timeString = step.destination.time;
-              let totalDistanceMeter = 0;
-              let totalTimeMS = 0;
-              let distanceProgression: number[] = [];
-              let vehicleProgressionMS: number[] = [];
-
-              if (stepIndex > 0 && step.type === "trip") {
-                const destinationTime = dayjs(step.destination.time);
-                const previousDestinationTime = dayjs(
-                  vehicle.steps[stepIndex - 1].destination.time,
-                );
-
-                totalTimeMS = destinationTime
-                  ? destinationTime.diff(previousDestinationTime)
-                  : 0;
-              }
-
-              // Iterating routes for distance
-              step.routes.forEach((route, routeIndex) => {
-                if (routeIndex > 0) {
-                  const prevRoute = step.routes[routeIndex - 1];
-                  totalDistanceMeter += turf.distance(
-                    turf.point([prevRoute[0], prevRoute[1]]),
-                    turf.point([route[0], route[1]]),
-                    { units: "meters" },
-                  );
-                }
-
-                distanceProgression[routeIndex] = totalDistanceMeter;
-              });
-
-              // Iterating routes for time
-              step.routes.forEach((route, routeIndex) => {
-                if (routeIndex > 0) {
-                  const prevRoute = step.routes[routeIndex - 1];
-                  const routeDistance = turf.distance(
-                    turf.point([prevRoute[0], prevRoute[1]]),
-                    turf.point([route[0], route[1]]),
-                    { units: "meters" },
-                  );
-
-                  totalVehicleProgressionMS +=
-                    (routeDistance / totalDistanceMeter) * totalTimeMS;
-                }
-
-                vehicleProgressionMS[routeIndex] = totalVehicleProgressionMS;
-              });
-
-              const computedStep: VehicleStep = {
-                ...step,
-                destination: {
-                  ...step.destination,
-                  time: timeString ? dayjs(timeString) : undefined,
-                },
-                totalTimeMS,
-                totalDistanceMeter,
-                distanceProgression,
-                vehicleProgressionMS,
-              };
-
-              return computedStep;
-            }),
-          ];
-
-          const computedVehicle = {
-            ...vehicle,
-            run: {
-              ...vehicle.run,
-              heading: 0,
-              progression: 0,
-            },
-            steps: steps,
-          };
-
-          console.log("computedVehicle", computedVehicle);
-
-          return computedVehicle;
-        });
+        console.log("Loading vehicles from local storage", vehiclesFromLocal);
+        return processVehiclesForSimulation(vehiclesFromLocal);
       }
     }
 
-    return processedVehicles;
+    return [];
   };
 
   useEffect(() => {
@@ -568,30 +586,31 @@ const SimulatorBasic = ({
 
   // Add vehicle steps
   const addVehicleSteps = () => {
-    setVehicles(
-      vehicles.map((d) => {
-        if (d.selected) {
-          d.steps = [
-            ...d.steps,
-            {
-              soc: 100,
-              type: "trip",
-              destination: {
-                time: tempStep.destination.time,
-                position: tempStep.routes[tempStep.routes.length - 1],
-              },
-              routes: tempStep.routes,
-              totalDistanceMeter: 0,
-              totalTimeMS: 0,
-              distanceProgression: [],
-              vehicleProgressionMS: [],
+    const updatedVehicles = vehicles.map((d) => {
+      if (d.selected) {
+        d.steps = [
+          ...d.steps,
+          {
+            soc: 100,
+            type: "trip",
+            destination: {
+              time: tempStep.destination.time,
+              position: tempStep.routes[tempStep.routes.length - 1],
             },
-          ];
-        }
+            routes: tempStep.routes,
+            totalDistanceMeter: 0,
+            totalTimeMS: 0,
+            distanceProgression: [],
+            vehicleProgressionMS: [],
+          },
+        ];
+      }
 
-        return d;
-      }),
-    );
+      return d;
+    });
+
+    // Process the updated vehicles to recalculate all progressions
+    updateVehiclesWithProcessing(updatedVehicles);
     setTempStep(resetStep);
     setAppStep("normal");
   };
@@ -691,7 +710,29 @@ const SimulatorBasic = ({
 
     console.log(">> restartSimulation", vehicles);
 
-    vehicles.forEach((vehicle) => {
+    // Reset all vehicles to their initial state before restarting
+    const resetVehicles = vehicles.map((vehicle) => {
+      // Find initial position from first step
+      const initialPosition = vehicle.steps.length > 0 
+        ? vehicle.steps[0].destination.position 
+        : [INITIAL_COORDINATES[0], INITIAL_COORDINATES[1]] as Position;
+
+      return {
+        ...vehicle,
+        run: {
+          progression: 0,
+          position: initialPosition as Position,
+          heading: 0,
+        }
+      };
+    });
+
+    // Update vehicles state and ref with reset vehicles
+    setVehicles(resetVehicles);
+    vehiclesRef.current = resetVehicles;
+
+    // Calculate simulation time bounds
+    resetVehicles.forEach((vehicle) => {
       vehicle.steps.forEach((step) => {
         if (!startTime) startTime = step.destination.time;
         if (!endTime) endTime = step.destination.time;
@@ -709,7 +750,8 @@ const SimulatorBasic = ({
     setSimulationConfig((prev) => {
       if (startTime) setSimulationTime(startTime);
 
-      localforage.setItem("vehicles", JSON.stringify(vehicles)).then(() => {});
+      // Save reset vehicles to localStorage
+      localforage.setItem("vehicles", JSON.stringify(resetVehicles)).then(() => {});
 
       return {
         ...prev,
@@ -972,7 +1014,7 @@ const SimulatorBasic = ({
 
             const uniqueVehicleIDs = [...new Set(vehicleIDs)];
 
-            const vehiclesFromCSV: Vehicle[] = uniqueVehicleIDs.map((id) => {
+            const rawVehiclesFromCSV: Vehicle[] = uniqueVehicleIDs.map((id) => {
               const vehicleStepsFromCSV: VehicleStep[] = csvData
                 .filter((row) => parseInt(row.vehicle_id) === id)
                 .map((row) => {
@@ -1015,16 +1057,19 @@ const SimulatorBasic = ({
               };
             });
 
-            setVehicles(vehiclesFromCSV);
+            // Process vehicles for simulation
+            const processedVehicles = processVehiclesForSimulation(rawVehiclesFromCSV);
 
-            vehiclesRef.current = vehiclesFromCSV;
+            setVehicles(processedVehicles);
+            vehiclesRef.current = processedVehicles;
+            
             localforage
-              .setItem("vehicles", JSON.stringify(vehiclesFromCSV))
+              .setItem("vehicles", JSON.stringify(processedVehicles))
               .then(() => {});
 
             setLatestRefreshDatetime(dayjs());
 
-            console.log("Vehicles state after import", vehiclesFromCSV);
+            console.log("Vehicles state after import", processedVehicles);
             console.log("VehiclesRef state after import", vehiclesRef.current);
 
             console.log("vehicleIDs", uniqueVehicleIDs);
@@ -1044,6 +1089,78 @@ const SimulatorBasic = ({
     [],
   );
 
+  // Handle JSON API import
+  const handleJsonApiImport = async (url: string) => {
+    setJsonApiLoading(true);
+    
+    try {
+      const response = await fetch(url);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const jsonData = await response.json();
+      
+      // Check if the response has the expected structure
+      if (!jsonData.vehicles || !Array.isArray(jsonData.vehicles)) {
+        throw new Error('Invalid JSON structure. Expected { vehicles: [...] }');
+      }
+      
+      // Process the raw vehicles data from API
+      const rawVehiclesFromAPI: Vehicle[] = jsonData.vehicles.map((vehicleData: any) => {
+        const rawSteps: VehicleStep[] = vehicleData.steps.map((step: any) => ({
+          type: step.type as "trip" | "stop" | "cdc" | "init",
+          destination: {
+            position: step.destination.position,
+            time: step.destination.time ? dayjs(step.destination.time) : undefined,
+          },
+          soc: step.soc,
+          totalDistanceMeter: step.totalDistanceMeter || 0,
+          totalTimeMS: step.totalTimeMS || 0,
+          routes: step.routes,
+          distanceProgression: step.distanceProgression || [],
+          vehicleProgressionMS: step.vehicleProgressionMS || [],
+        }));
+
+        return {
+          id: vehicleData.id,
+          label: vehicleData.label || `Vehicle ${vehicleData.id}`,
+          batteryCapacityKWH: vehicleData.batteryCapacityKWH || 40,
+          steps: rawSteps,
+          run: {
+            progression: vehicleData.run?.progression || 0,
+            position: vehicleData.run?.position || [0, 0],
+            heading: vehicleData.run?.heading || 0,
+          },
+          selected: vehicleData.selected || false,
+        };
+      });
+
+      // Process vehicles for simulation
+      const processedVehicles = processVehiclesForSimulation(rawVehiclesFromAPI);
+
+      setVehicles(processedVehicles);
+      vehiclesRef.current = processedVehicles;
+      
+      // Save to local storage
+      localforage.setItem("vehicles", JSON.stringify(processedVehicles)).then(() => {});
+      setLatestRefreshDatetime(dayjs());
+
+      console.log("Vehicles imported from API:", processedVehicles);
+      alert(`Successfully imported ${processedVehicles.length} vehicles from API!`);
+      
+      // Clear the URL input after successful import
+      setJsonApiUrl('');
+      
+    } catch (error) {
+      console.error("Error importing from JSON API:", error);
+      alert(`Error importing from API: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setJsonApiLoading(false);
+    }
+  };
+
   /* -------------------- RENDERS -------------------- */
 
   return (
@@ -1058,9 +1175,9 @@ const SimulatorBasic = ({
         <div className="flex flex-row p-1 px-2 rounded bg-slate-700 gap-2 items-center text-xs">
           <span className="text-slate-100">Dataset</span>
           <button
-            onClick={() => setShow((v) => ({ ...v, datasetGenerator: true }))}
+            onClick={() => setDatasetMode('generate')}
             className={
-              show.datasetGenerator
+              datasetMode === 'generate'
                 ? tailwindStyles.button.selected
                 : tailwindStyles.button.basic
             }
@@ -1068,14 +1185,24 @@ const SimulatorBasic = ({
             Generate
           </button>
           <button
-            onClick={() => setShow((v) => ({ ...v, datasetGenerator: false }))}
+            onClick={() => setDatasetMode('import')}
             className={
-              show.datasetGenerator
-                ? tailwindStyles.button.basic
-                : tailwindStyles.button.selected
+              datasetMode === 'import'
+                ? tailwindStyles.button.selected
+                : tailwindStyles.button.basic
             }
           >
             Import
+          </button>
+          <button
+            onClick={() => setDatasetMode('jsonapi')}
+            className={
+              datasetMode === 'jsonapi'
+                ? tailwindStyles.button.selected
+                : tailwindStyles.button.basic
+            }
+          >
+            JSON API
           </button>
         </div>
       </div>
@@ -1214,7 +1341,7 @@ const SimulatorBasic = ({
               </div>
             </div>
           )}
-          {show.datasetGenerator && (
+          {datasetMode === 'generate' && (
             <div className="flex flex-col gap-2">
               <h1 className="font-semibold">Dataset Generator</h1>
               <div className="flex flex-row justify-between items-center">
@@ -1227,7 +1354,7 @@ const SimulatorBasic = ({
               </div>
             </div>
           )}
-          {!show.datasetGenerator && (
+          {datasetMode === 'import' && (
             <div className="flex flex-col gap-2">
               <h1 className="font-semibold">Dataset Importer</h1>
               <div className="flex flex-row items-center gap-2 justify-center">
@@ -1265,6 +1392,56 @@ const SimulatorBasic = ({
               </div>
             </div>
           )}
+          {datasetMode === 'jsonapi' && (
+            <div className="flex flex-col gap-2">
+              <h1 className="font-semibold">JSON API</h1>
+              <div className="flex flex-col gap-2">
+                <input
+                  type="url"
+                  placeholder="Enter JSON API URL (e.g., http://localhost:8000/vehicles)"
+                  className={`${tailwindStyles.input.basic}`}
+                  value={jsonApiUrl}
+                  onChange={(e) => setJsonApiUrl(e.target.value)}
+                  disabled={jsonApiLoading}
+                />
+                <button
+                  onClick={() => {
+                    if (jsonApiUrl.trim()) {
+                      handleJsonApiImport(jsonApiUrl.trim());
+                    }
+                  }}
+                  disabled={!jsonApiUrl.trim() || jsonApiLoading}
+                  className={`${tailwindStyles.button.basic} ${
+                    !jsonApiUrl.trim() || jsonApiLoading 
+                      ? 'bg-slate-300 text-slate-500 cursor-not-allowed' 
+                      : ''
+                  }`}
+                >
+                  {jsonApiLoading ? (
+                    <>⏳ Loading...</>
+                  ) : (
+                    <><FaUpload /> Fetch from API</>
+                  )}
+                </button>
+                <div className="text-xs text-slate-600">
+                  <p>Expected JSON format:</p>
+                  <pre className="text-xs bg-slate-100 p-2 rounded mt-1">
+{`{
+  "vehicles": [
+    {
+      "id": 1,
+      "label": "Vehicle 1",
+      "batteryCapacityKWH": 40,
+      "steps": [...],
+      "run": {...}
+    }
+  ]
+}`}
+                  </pre>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* List of vehicles */}
@@ -1283,7 +1460,7 @@ const SimulatorBasic = ({
                     <h4 className="font-semibold">
                       Total steps: {d.steps.length}
                     </h4>
-                    {show.datasetGenerator && (
+                    {datasetMode === 'generate' && (
                       <div className="flex flex-row items-center">
                         <FaPlus className="mr-2" />
                         <button
@@ -1350,13 +1527,23 @@ const SimulatorBasic = ({
               );
             }),
           ]}
-          <div
-            onClick={() => {
-              downloadVehicleDataAsCSV(vehicles);
-            }}
-            className="flex flex-row p-4"
-          >
-            <Button size="small">Download Data</Button>
+          <div className="flex flex-row gap-2 p-4">
+            <Button 
+              size="small"
+              onClick={() => {
+                downloadVehicleDataAsCSV(vehicles);
+              }}
+            >
+              Download CSV
+            </Button>
+            <Button 
+              size="small"
+              onClick={() => {
+                downloadVehicleDataAsJSON(vehicles);
+              }}
+            >
+              Download JSON
+            </Button>
           </div>
         </div>
       </div>
