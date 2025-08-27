@@ -9,10 +9,6 @@ const router = createHashRouter([
         index: true,
         element: <SimulatorCSVInput />,
       },
-      {
-        path: "csv",
-        element: <SimulatorCSVInput />,
-      },
     ],
   },
 ]);

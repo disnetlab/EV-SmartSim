@@ -4,9 +4,19 @@ from pydantic import BaseModel, validator
 from typing import List, Optional, Union
 from datetime import datetime
 import json
+from enum import Enum
 
 # Position is [longitude, latitude] array format like deck.gl
 Position = List[float]
+
+# EV Charging Infrastructure Enums
+class EVSEType(str, Enum):
+    residential = "residential"
+    workplace = "workplace"
+    public_ac = "public_ac"
+    public_dc = "public_dc"
+    depot = "depot"
+    highway = "highway"
 
 class VehicleDestination(BaseModel):
     position: Position
@@ -40,6 +50,15 @@ class Vehicle(BaseModel):
     steps: List[VehicleStep]
     run: VehicleRun
     selected: bool
+
+class ChargingPlace(BaseModel):
+    id: int
+    name: str
+    position: Position
+    evse_type: EVSEType
+    max_power_kw: float
+    price_per_kwh: Optional[float] = None
+    operator: Optional[str] = None
 
 app = FastAPI()
 
@@ -234,6 +253,46 @@ dummy_vehicles = [
     }
 ]
 
+# Sample charging places data for Melbourne/Clayton area
+dummy_charging_places = [
+    {
+        "id": 1,
+        "name": "Clayton Home Charging",
+        "position": [145.1275, -37.9145],
+        "evse_type": "residential",
+        "max_power_kw": 7.4,
+        "price_per_kwh": 0.25,
+        "operator": "Private"
+    },
+    {
+        "id": 2,
+        "name": "Monash University Workplace",
+        "position": [145.1341, -37.9105],
+        "evse_type": "workplace",
+        "max_power_kw": 11.0,
+        "price_per_kwh": 0.20,
+        "operator": "Monash Energy"
+    },
+    {
+        "id": 3,
+        "name": "BP Pulse Clayton Road",
+        "position": [145.1180, -37.9260],
+        "evse_type": "public_dc",
+        "max_power_kw": 150.0,
+        "price_per_kwh": 0.45,
+        "operator": "BP Pulse"
+    },
+    {
+        "id": 4,
+        "name": "Tesla Supercharger Dandenong",
+        "position": [145.2150, -37.9870],
+        "evse_type": "highway",
+        "max_power_kw": 250.0,
+        "price_per_kwh": 0.42,
+        "operator": "Tesla"
+    }
+]
+
 @app.get("/")
 async def root():
     return {"message": "EV-SmartSim Backend API"}
@@ -295,6 +354,75 @@ async def export_vehicles_csv():
                 "routes": json.dumps(step["routes"])
             }
             csv_data.append(csv_row)
+    
+    return {"csv_data": csv_data}
+
+# Charging Places API Endpoints
+@app.get("/places")
+async def get_charging_places():
+    """Get all charging places"""
+    return {"places": dummy_charging_places}
+
+@app.get("/places/{place_id}")
+async def get_charging_place(place_id: int):
+    """Get a specific charging place by ID"""
+    place = next((p for p in dummy_charging_places if p["id"] == place_id), None)
+    if not place:
+        raise HTTPException(status_code=404, detail="Charging place not found")
+    return place
+
+@app.post("/places")
+async def create_charging_place(place: ChargingPlace):
+    """Create or update a charging place"""
+    # Check if place with this ID already exists
+    existing_index = next((i for i, p in enumerate(dummy_charging_places) if p["id"] == place.id), None)
+    
+    place_dict = place.dict()
+    
+    if existing_index is not None:
+        dummy_charging_places[existing_index] = place_dict
+        return {"message": "Charging place updated", "place": place_dict}
+    else:
+        dummy_charging_places.append(place_dict)
+        return {"message": "Charging place created", "place": place_dict}
+
+@app.delete("/places/{place_id}")
+async def delete_charging_place(place_id: int):
+    """Delete a charging place by ID"""
+    global dummy_charging_places
+    place_index = next((i for i, p in enumerate(dummy_charging_places) if p["id"] == place_id), None)
+    
+    if place_index is None:
+        raise HTTPException(status_code=404, detail="Charging place not found")
+    
+    deleted_place = dummy_charging_places.pop(place_index)
+    return {"message": "Charging place deleted", "place": deleted_place}
+
+@app.delete("/places")
+async def delete_all_charging_places():
+    """Delete all charging places"""
+    global dummy_charging_places
+    deleted_count = len(dummy_charging_places)
+    dummy_charging_places.clear()
+    return {"message": f"All charging places deleted", "deleted_count": deleted_count}
+
+@app.get("/places/export/csv")
+async def export_charging_places_csv():
+    """Export charging places data in CSV format"""
+    csv_data = []
+    
+    for place in dummy_charging_places:
+        csv_row = {
+            "id": place["id"],
+            "name": place["name"],
+            "longitude": place["position"][0],
+            "latitude": place["position"][1],
+            "evse_type": place["evse_type"],
+            "max_power_kw": place["max_power_kw"],
+            "price_per_kwh": place.get("price_per_kwh", ""),
+            "operator": place.get("operator", "")
+        }
+        csv_data.append(csv_row)
     
     return {"csv_data": csv_data}
 

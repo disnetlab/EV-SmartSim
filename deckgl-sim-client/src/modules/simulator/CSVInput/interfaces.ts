@@ -27,3 +27,16 @@ export interface Vehicle {
   };
   selected: boolean;
 }
+
+// EV Charging Infrastructure Types
+export type EVSEType = "residential" | "workplace" | "public_ac" | "public_dc" | "depot" | "highway";
+
+export interface ChargingPlace {
+  id: number;
+  name: string;
+  position: Position; // [longitude, latitude]
+  evse_type: EVSEType;
+  max_power_kw: number;
+  price_per_kwh?: number; // Optional pricing
+  operator?: string; // CPO (Charge Point Operator)
+}

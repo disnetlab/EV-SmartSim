@@ -1,0 +1,13 @@
+id,name,longitude,latitude,evse_type,max_power_kw,price_per_kwh,operator
+1,Clayton Home Charging,145.1275,-37.9145,residential,7.4,0.25,Private
+2,Monash University Workplace,145.1341,-37.9105,workplace,11,0.20,Monash Energy
+3,Chadstone Shopping Centre,145.0826,-37.8856,public_ac,22,0.35,ChargePoint
+4,BP Pulse Clayton Road,145.1180,-37.9260,public_dc,150,0.45,BP Pulse
+5,Tesla Supercharger Dandenong,145.2150,-37.9870,highway,250,0.42,Tesla
+6,Home Charging Noble Park,145.1750,-37.9680,residential,2.4,0.25,Private
+7,RACV Solar Charging Hub,145.0920,-37.8990,public_dc,350,0.39,RACV
+8,Glen Waverley Station,145.1610,-37.8790,public_ac,22,0.33,PTV
+9,Oakleigh Depot Charging,145.0950,-37.9010,depot,43,0.28,Metro Trains
+10,Springvale Community Hub,145.1510,-37.9490,public_ac,11,0.32,Greater Dandenong Council
+11,Friends Home,145.13804515270974,-37.88798677167385,stop,null,null,null,null
+12,Gardenhub Office,145.12629592518113,-37.88837618301963,workplace,11,0.20,Monash Energy
