@@ -29,7 +29,7 @@ export interface Vehicle {
 }
 
 // EV Charging Infrastructure Types
-export type EVSEType = "residential" | "workplace" | "public_ac" | "public_dc" | "depot" | "highway";
+export type EVSEType = "residential" | "workplace" | "public_ac" | "public_dc" | "depot" | "highway" | "stop";
 
 export interface ChargingPlace {
   id: number;

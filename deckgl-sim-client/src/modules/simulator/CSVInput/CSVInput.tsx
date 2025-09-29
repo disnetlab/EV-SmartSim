@@ -4,17 +4,19 @@ import DeckGL, {
   FlyToInterpolator,
   GeoJsonLayer,
   IconLayer,
+  LineLayer,
   MapView,
   MapViewState,
   PathLayer,
   Position,
   ScatterplotLayer,
+  TextLayer,
   TileLayer,
 } from "deck.gl";
 import { PathStyleExtension } from "@deck.gl/extensions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaTimes } from "react-icons/fa";
-import dayjs, { Dayjs, Ls } from "dayjs";
+import dayjs, { Dayjs } from "dayjs";
 import {
   FaArrowRotateRight,
   FaCheck,
@@ -27,10 +29,10 @@ import {
 import { point, distance } from "@turf/turf";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
-import localforage, { LOCALSTORAGE } from "localforage";
+import localforage from "localforage";
 import * as turf from "@turf/turf";
 import Button from "../../../shared/ui/Button";
-import { Vehicle, VehicleStep } from "./interfaces";
+import { Vehicle, VehicleStep, ChargingPlace } from "./interfaces";
 import { downloadVehicleDataAsCSV, downloadVehicleDataAsJSON } from "./utils";
 import Papa from "papaparse";
 
@@ -118,13 +120,21 @@ const SimulatorBasic = ({
 
   // List of vehicles in simulator
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
-
   const vehiclesRef = useRef(vehicles);
+
+  // List of charging places in simulator
+  const [chargingPlaces, setChargingPlaces] = useState<ChargingPlace[]>([]);
+  const chargingPlacesRef = useRef<ChargingPlace[]>([]);
 
   useEffect(() => {
     vehiclesRef.current = vehicles;
     console.log("VehiclesRef synchronized with vehicles state:", vehiclesRef.current);
   }, [vehicles]);
+
+  useEffect(() => {
+    chargingPlacesRef.current = chargingPlaces;
+    console.log("ChargingPlacesRef synchronized with places state:", chargingPlacesRef.current);
+  }, [chargingPlaces]);
 
   // Helper function to update vehicles with proper processing and ref sync
   const updateVehiclesWithProcessing = (newVehicles: Vehicle[]) => {
@@ -172,21 +182,73 @@ const SimulatorBasic = ({
     prevPos: [number, number],
     currentPos: [number, number],
     vehicleID: number,
+    currentHeading: number = 0,
   ): number => {
-    if (!prevPos || !currentPos) return 0;
+    if (!prevPos || !currentPos) return currentHeading;
 
-    const [long1, lat1] = prevPos;
+    // Check if positions are the same (no movement)
+    const deltaLong = Math.abs(currentPos[0] - prevPos[0]);
+    const deltaLat = Math.abs(currentPos[1] - prevPos[1]);
+    const minMovement = 0.00001; // Minimum movement threshold
+    
+    if (deltaLong < minMovement && deltaLat < minMovement) {
+      return currentHeading; // Keep current heading if no significant movement
+    }
 
-    const northPoint = [long1, lat1 + 0.001];
-
-    let angle = 0;
-    angle = turf.angle(northPoint, prevPos, currentPos);
-
-    console.log(
-      `getHeading vehicle ${vehicleID} prev: ${prevPos}, current: ${currentPos}, heading: ${angle}`,
+    // Use turf.bearing to get the direction from prevPos to currentPos
+    // This gives us the angle in degrees from North (0°) clockwise
+    const bearing = turf.bearing(
+      turf.point([prevPos[0], prevPos[1]]),
+      turf.point([currentPos[0], currentPos[1]])
     );
 
-    return angle;
+    // Convert bearing to deck.gl coordinate system:
+    // - Turf.js bearing: 0° = North, clockwise positive
+    // - deck.gl rotation: 0° = East, counter-clockwise positive
+    
+    // Convert from geographic bearing to deck.gl angle
+    let deckGLAngle = 90 - bearing; // Convert North-based to East-based
+    
+    // Add 180° to flip the car icon direction
+    deckGLAngle += 180;
+    
+    // Normalize angle to 0-360 range
+    if (deckGLAngle < 0) {
+      deckGLAngle += 360;
+    }
+    if (deckGLAngle >= 360) {
+      deckGLAngle -= 360;
+    }
+
+    // Smooth heading transition to avoid sudden jumps
+    if (currentHeading !== 0) {
+      const angleDiff = deckGLAngle - currentHeading;
+      let shortestAngleDiff = angleDiff;
+      
+      // Handle angle wrapping (e.g., 350° to 10°)
+      if (angleDiff > 180) {
+        shortestAngleDiff = angleDiff - 360;
+      } else if (angleDiff < -180) {
+        shortestAngleDiff = angleDiff + 360;
+      }
+      
+      // Limit heading change per frame for smoother rotation
+      const maxHeadingChange = 15; // degrees per frame
+      if (Math.abs(shortestAngleDiff) > maxHeadingChange) {
+        const direction = shortestAngleDiff > 0 ? 1 : -1;
+        deckGLAngle = currentHeading + (direction * maxHeadingChange);
+        
+        // Normalize again
+        if (deckGLAngle < 0) deckGLAngle += 360;
+        if (deckGLAngle >= 360) deckGLAngle -= 360;
+      }
+    }
+
+    console.log(
+      `getHeading vehicle ${vehicleID}: prev: [${prevPos.map(p => p.toFixed(5))}], current: [${currentPos.map(p => p.toFixed(5))}], bearing: ${bearing.toFixed(1)}°, deckGL: ${deckGLAngle.toFixed(1)}°`,
+    );
+
+    return deckGLAngle;
   };
 
   useEffect(() => {
@@ -216,10 +278,18 @@ const SimulatorBasic = ({
               ) <= 0
             ) {
               // Update animation
-              let newVehiclePositionUpdated = false;
 
               // Traversing steps and step routes to get recent route position
               vehicle.steps.map((step, stepIndex) => {
+                // Skip animation for stationary steps (stop/cdc) - vehicle should remain at position
+                if (step.type === "stop" || step.type === "cdc") {
+                  // For stationary steps, just check if we're in the time window and set position
+                  if (newVehicleRunProgression >= step.vehicleProgressionMS[0]) {
+                    newVehiclePosition = step.destination.position;
+                  }
+                  return; // Skip the route progression logic
+                }
+
                 // console.log(`vehicle ${vehicle.id} stepIndex ${stepIndex} ${step.vehicleProgressionMS.length} runProgression ${newVehicleRunProgression}`)
 
                 step.vehicleProgressionMS.map((progress, progressIndex) => {
@@ -263,8 +333,8 @@ const SimulatorBasic = ({
                         [prevPosition[0], prevPosition[1]],
                         [newVehiclePosition[0], newVehiclePosition[1]],
                         vehicle.id,
+                        newVehicleHeading,
                       );
-                      newVehiclePositionUpdated = true;
                     } else if (
                       nextProgressOnNextStep &&
                       nextRoutePositionOnNextStep &&
@@ -291,8 +361,8 @@ const SimulatorBasic = ({
                         [prevPosition[0], prevPosition[1]],
                         [newVehiclePosition[0], newVehiclePosition[1]],
                         vehicle.id,
+                        newVehicleHeading,
                       );
-                      newVehiclePositionUpdated = true;
                     } else {
                       // console.log(`Got it from current position`, progressIndex, currentRoutePosition)
                       const prevPosition = newVehiclePosition;
@@ -301,8 +371,8 @@ const SimulatorBasic = ({
                         [prevPosition[0], prevPosition[1]],
                         [newVehiclePosition[0], newVehiclePosition[1]],
                         vehicle.id,
+                        newVehicleHeading,
                       );
-                      newVehiclePositionUpdated = true;
                     }
 
                     // Next route position in different step exists
@@ -346,8 +416,8 @@ const SimulatorBasic = ({
     }
   }, [simulationConfig, latestRefreshDatetime]);
 
-  // App menus visibiliy config
-  const [show, setShow] = useState({
+  // App menus visibiliy config 
+  const [show] = useState({
     tileBgMap: true,
     vectorBgMap: false,
     datasetImporter: false,
@@ -377,7 +447,7 @@ const SimulatorBasic = ({
         let distanceProgression: number[] = [];
         let vehicleProgressionMS: number[] = [];
 
-        if (stepIndex > 0 && step.type === "trip") {
+        if (stepIndex > 0) {
           const destinationTime = dayjs(step.destination.time);
           const previousDestinationTime = dayjs(
             vehicle.steps[stepIndex - 1].destination.time,
@@ -388,36 +458,46 @@ const SimulatorBasic = ({
             : 0;
         }
 
-        // Iterating routes for distance
-        step.routes.forEach((route, routeIndex) => {
-          if (routeIndex > 0) {
-            const prevRoute = step.routes[routeIndex - 1];
-            totalDistanceMeter += turf.distance(
-              turf.point([prevRoute[0], prevRoute[1]]),
-              turf.point([route[0], route[1]]),
-              { units: "meters" },
-            );
-          }
+        // For stationary steps (stop/cdc), skip distance calculations
+        if (step.type === "stop" || step.type === "cdc") {
+          // Stationary steps: no distance, just time progression
+          totalDistanceMeter = 0;
+          distanceProgression = [0];
+          vehicleProgressionMS = [totalVehicleProgressionMS];
+          totalVehicleProgressionMS += totalTimeMS;
+        } else {
+          // For movement steps (trip/init), calculate distances and progression
+          // Iterating routes for distance
+          step.routes.forEach((route, routeIndex) => {
+            if (routeIndex > 0) {
+              const prevRoute = step.routes[routeIndex - 1];
+              totalDistanceMeter += turf.distance(
+                turf.point([prevRoute[0], prevRoute[1]]),
+                turf.point([route[0], route[1]]),
+                { units: "meters" },
+              );
+            }
 
-          distanceProgression[routeIndex] = totalDistanceMeter;
-        });
+            distanceProgression[routeIndex] = totalDistanceMeter;
+          });
 
-        // Iterating routes for time
-        step.routes.forEach((route, routeIndex) => {
-          if (routeIndex > 0) {
-            const prevRoute = step.routes[routeIndex - 1];
-            const routeDistance = turf.distance(
-              turf.point([prevRoute[0], prevRoute[1]]),
-              turf.point([route[0], route[1]]),
-              { units: "meters" },
-            );
+          // Iterating routes for time
+          step.routes.forEach((route, routeIndex) => {
+            if (routeIndex > 0) {
+              const prevRoute = step.routes[routeIndex - 1];
+              const routeDistance = turf.distance(
+                turf.point([prevRoute[0], prevRoute[1]]),
+                turf.point([route[0], route[1]]),
+                { units: "meters" },
+              );
 
-            totalVehicleProgressionMS +=
-              (routeDistance / totalDistanceMeter) * totalTimeMS;
-          }
+              totalVehicleProgressionMS +=
+                totalDistanceMeter > 0 ? (routeDistance / totalDistanceMeter) * totalTimeMS : 0;
+            }
 
-          vehicleProgressionMS[routeIndex] = totalVehicleProgressionMS;
-        });
+            vehicleProgressionMS[routeIndex] = totalVehicleProgressionMS;
+          });
+        }
 
         const computedStep: VehicleStep = {
           ...step,
@@ -463,9 +543,26 @@ const SimulatorBasic = ({
     return [];
   };
 
+    const loadChargingPlacesFromLocal = async (): Promise<ChargingPlace[]> => {
+    const res = await localforage.getItem("chargingPlaces");
+
+    if (res) {
+      const placesFromLocal: ChargingPlace[] = JSON.parse(res as string);
+      if (placesFromLocal) {
+        console.log("Loading charging places from local storage", placesFromLocal);
+        return placesFromLocal;
+      }
+    }
+
+    return [];
+  };
+
   useEffect(() => {
     loadVehiclesFromLocal().then((res) => {
       setVehicles(res);
+    });
+    loadChargingPlacesFromLocal().then((res) => {
+      setChargingPlaces(res);
     });
   }, []);
 
@@ -490,6 +587,26 @@ const SimulatorBasic = ({
     () => vehicles.find((v) => v.selected),
     [vehicles],
   );
+
+  // Get current step index for a vehicle based on simulation time
+  const getCurrentStepIndex = useCallback((vehicle: Vehicle): number => {
+    if (!simulationConfig.start) return -1;
+    
+    // Find which step the vehicle is currently executing
+    for (let i = vehicle.steps.length - 1; i >= 0; i--) {
+      const step = vehicle.steps[i];
+      const nextStep = vehicle.steps[i + 1];
+      
+      if (step.destination.time && simulationTime.isAfter(step.destination.time)) {
+        // If there's a next step, we're executing it
+        // If no next step, we're at the final step
+        return nextStep ? i + 1 : i;
+      }
+    }
+    
+    // Before any step time, show the first step (init)
+    return 0;
+  }, [simulationTime, simulationConfig.start]);
 
   // Update new vehicle init time
   const updateNewVehicleInitTime = (date: Dayjs) => {
@@ -588,13 +705,17 @@ const SimulatorBasic = ({
   const addVehicleSteps = () => {
     const updatedVehicles = vehicles.map((d) => {
       if (d.selected) {
+        // Calculate destination time based on tempStepTimeDelta
+        const lastStep = d.steps[d.steps.length - 1];
+        const destinationTime = lastStep.destination.time?.add(Number(tempStepTimeDelta) || 0, 'minute');
+        
         d.steps = [
           ...d.steps,
           {
-            soc: 100,
-            type: "trip",
+            soc: 100, // Will be adjusted by user later
+            type: tempStep.type,
             destination: {
-              time: tempStep.destination.time,
+              time: destinationTime,
               position: tempStep.routes[tempStep.routes.length - 1],
             },
             routes: tempStep.routes,
@@ -922,12 +1043,13 @@ const SimulatorBasic = ({
         url: "/car-icon.png",
         width: 486 / 5,
         height: 1157 / 5,
-        anchorY: 64, // Adjust based on your icon
+        anchorX: 486 / 10, // Center horizontally
+        anchorY: 1157 / 10, // Center vertically for better rotation
       }),
       visible: simulationConfig.start === true,
       getPosition: (d) => d.run.position,
-      getSize: 32, // Adjust size as needed
-      getAngle: (d) => d.run.heading, // Subtract 90 to align icon properly
+      getSize: 32,
+      getAngle: (d) => d.run.heading, // Now using corrected heading calculation
       sizeScale: 1,
       sizeUnits: "pixels",
     }),
@@ -938,12 +1060,13 @@ const SimulatorBasic = ({
         url: "/car-icon.png",
         width: 486 / 5,
         height: 1157 / 5,
-        anchorY: 64, // Adjust based on your icon
+        anchorX: 486 / 10, // Center horizontally
+        anchorY: 1157 / 10, // Center vertically for better rotation
       }),
       visible: simulationConfig.start === false,
       getPosition: (d) => d.steps[d.steps.length - 1].destination.position,
-      getSize: 40, // Adjust size as needed
-      getAngle: () => 0, // Subtract 90 to align icon properly
+      getSize: 40,
+      getAngle: () => 0, // Static cars point East (default direction)
       sizeScale: 1,
       sizeUnits: "pixels",
     }),
@@ -972,10 +1095,263 @@ const SimulatorBasic = ({
       widthMinPixels: 4,
       getLineWidth: 2,
     }),
+    // Charging Places Layer - Now using IconLayer with SVG icons
+    new IconLayer<ChargingPlace>({
+      id: "charging-places-layer",
+      data: chargingPlaces,
+      getPosition: (d) => d.position,
+      getIcon: (d) => {
+        // Map EVSE types to appropriate icons
+        let iconUrl = "/icons/gas-station.svg"; // Default for public charging
+        
+        switch (d.evse_type) {
+          case "residential":
+            iconUrl = "/icons/house.svg";
+            break;
+          case "workplace":
+            iconUrl = "/icons/office.svg";
+            break;
+          case "stop":
+            iconUrl = "/icons/stop.svg";
+            break;
+          case "public_ac":
+          case "public_dc":
+          case "highway":
+          case "depot":
+          default:
+            iconUrl = "/icons/gas-station.svg";
+            break;
+        }
+        
+        return {
+          url: iconUrl,
+          width: 24,
+          height: 24,
+          anchorX: 12,
+          anchorY: 12
+        };
+      },
+      getSize: (d) => {
+        // Size based on power level
+        if (d.max_power_kw >= 100) return 32;  // DC Fast Charging
+        if (d.max_power_kw >= 20) return 24;   // Level 2 AC
+        return 18;                             // Level 1 AC
+      },
+      getColor: (d) => {
+        // Color tinting based on EVSE type
+        switch (d.evse_type) {
+          case "residential": return [100, 200, 100, 255];
+          case "workplace": return [100, 150, 255, 255];
+          case "public_ac": return [255, 200, 100, 255];
+          case "public_dc": return [255, 100, 100, 255];
+          case "highway": return [255, 50, 150, 255];
+          case "depot": return [150, 100, 255, 255];
+          default: return [128, 128, 128, 255];
+        }
+      },
+      pickable: true,
+      sizeScale: 1,
+      sizeUnits: "pixels",
+      billboard: true,
+    }),
+    // Battery Progress Bar Background (Black Line) for Charging Vehicles  
+    new LineLayer<Vehicle>({
+      id: "battery-progress-bg",
+      data: vehicles.filter(v => {
+        if (!simulationConfig.start) return false;
+        const currentStepIndex = getCurrentStepIndex(v);
+        const currentStep = v.steps[currentStepIndex];
+        return currentStep?.type === "cdc"; // Only show for vehicles currently charging
+      }),
+      getSourcePosition: (d) => [d.run.position[0] - 0.0003, d.run.position[1] + 0.0048], // Start left of vehicle, above
+      getTargetPosition: (d) => [d.run.position[0] + (0.0003 * 10), d.run.position[1] + 0.0048], // End right of vehicle, above
+      getColor: [0, 0, 0, 200], // Black background line
+      getWidth: 20, // 4px thick base line
+      widthUnits: "pixels",
+      widthMinPixels: 4,
+      widthMaxPixels: 20,
+    }),
+    // Battery Progress Bar Fill (Colored Line) for Charging Vehicles
+    new LineLayer<Vehicle>({
+      id: "battery-progress-fill",
+      data: vehicles.filter(v => {
+        if (!simulationConfig.start) return false;
+        const currentStepIndex = getCurrentStepIndex(v);
+        const currentStep = v.steps[currentStepIndex];
+        return currentStep?.type === "cdc"; // Only show for vehicles currently charging
+      }),
+      getSourcePosition: (d) => [d.run.position[0] - 0.0003, d.run.position[1] + 0.0048], // Start same as background
+      getTargetPosition: (d) => {
+        // Calculate dynamic line length based on SOC
+        const currentStepIndex = getCurrentStepIndex(d);
+        const currentStep = d.steps[currentStepIndex];
+        const prevStep = currentStepIndex > 0 ? d.steps[currentStepIndex - 1] : null;
+        
+        let interpolatedSOC = currentStep?.soc || 0;
+        if (currentStep && prevStep && simulationTime && currentStep.destination.time && prevStep.destination.time) {
+          const stepStartTime = prevStep.destination.time;
+          const stepEndTime = currentStep.destination.time;
+          const currentTime = simulationTime;
+          const stepTotalDuration = stepEndTime.diff(stepStartTime);
+          const stepElapsed = currentTime.diff(stepStartTime);
+          const stepProgress = Math.max(0, Math.min(1, stepElapsed / stepTotalDuration));
+          const startSOC = prevStep.soc;
+          const endSOC = currentStep.soc;
+          interpolatedSOC = startSOC + (endSOC - startSOC) * stepProgress;
+        }
+        
+        // Calculate end position based on SOC (0-100% = left to right)
+        const socRatio = Math.max(0, Math.min(100, interpolatedSOC)) / 100;
+        const maxLength = 0.0006 * 10; // Total bar length in coordinates (~60m)
+        const currentLength = maxLength * socRatio;
+        
+        return [d.run.position[0] - 0.0003 + currentLength, d.run.position[1] + 0.0048];
+      },
+      getColor: (d) => {
+        // Calculate SOC for color
+        const currentStepIndex = getCurrentStepIndex(d);
+        const currentStep = d.steps[currentStepIndex];
+        const prevStep = currentStepIndex > 0 ? d.steps[currentStepIndex - 1] : null;
+        
+        let interpolatedSOC = currentStep?.soc || 0;
+        if (currentStep && prevStep && simulationTime && currentStep.destination.time && prevStep.destination.time) {
+          const stepStartTime = prevStep.destination.time;
+          const stepEndTime = currentStep.destination.time;
+          const currentTime = simulationTime;
+          const stepTotalDuration = stepEndTime.diff(stepStartTime);
+          const stepElapsed = currentTime.diff(stepStartTime);
+          const stepProgress = Math.max(0, Math.min(1, stepElapsed / stepTotalDuration));
+          const startSOC = prevStep.soc;
+          const endSOC = currentStep.soc;
+          interpolatedSOC = startSOC + (endSOC - startSOC) * stepProgress;
+        }
+        
+        // Color gradient: red → yellow → green
+        if (interpolatedSOC <= 50) {
+          const ratio = interpolatedSOC / 50;
+          return [255, Math.round(255 * ratio), 0, 255];
+        } else {
+          const ratio = (interpolatedSOC - 50) / 50;
+          return [Math.round(255 * (1 - ratio)), 255, 0, 255];
+        }
+      },
+      getWidth: 20, // Same 4px width as background
+      widthUnits: "pixels",
+      widthMinPixels: 4,
+      widthMaxPixels: 20,
+    }),
+    // Vehicle SOC Text Layer - Shows battery percentage beside vehicles
+    new TextLayer({
+      id: "vehicle-soc-layer",  
+      data: vehicles.filter(() => simulationConfig.start), // Only show when simulation is running
+      getPosition: (d) => {
+        // Position text slightly offset from vehicle position
+        const pos = d.run.position;
+        return [pos[0] + 0.002, pos[1] + 0.001]; // Offset by ~200m east and ~100m north
+      },
+      getText: (d) => {
+        const currentStepIndex = getCurrentStepIndex(d);
+        const currentStep = d.steps[currentStepIndex];
+        const prevStep = currentStepIndex > 0 ? d.steps[currentStepIndex - 1] : null;
+        
+        let interpolatedSOC = currentStep?.soc || 0;
+        
+        // Smooth SOC interpolation during steps
+        if (currentStep && prevStep && simulationTime && currentStep.destination.time && prevStep.destination.time) {
+          const stepStartTime = prevStep.destination.time;
+          const stepEndTime = currentStep.destination.time;
+          const currentTime = simulationTime;
+          
+          // Calculate progress within current step (0 to 1)
+          const stepTotalDuration = stepEndTime.diff(stepStartTime);
+          const stepElapsed = currentTime.diff(stepStartTime);
+          const stepProgress = Math.max(0, Math.min(1, stepElapsed / stepTotalDuration));
+          
+          // Interpolate SOC between previous and current step
+          const startSOC = prevStep.soc;
+          const endSOC = currentStep.soc;
+          interpolatedSOC = startSOC + (endSOC - startSOC) * stepProgress;
+        }
+        
+        // Round to 2 decimal places for smooth animation
+        const displaySOC = Math.round(interpolatedSOC * 100) / 100;
+        
+        // Show different text based on step type
+        if (currentStep?.type === "cdc") {
+          return `🔋${displaySOC}%⚡`;
+        } else if (currentStep?.type === "stop") {
+          return `🔋${displaySOC}%🛑`;
+        } else {
+          return `🔋${displaySOC}%`;
+        }
+      },
+      getSize: 16,
+      getColor: (d) => {
+        const currentStepIndex = getCurrentStepIndex(d);
+        const currentStep = d.steps[currentStepIndex];
+        const prevStep = currentStepIndex > 0 ? d.steps[currentStepIndex - 1] : null;
+        
+        // Calculate interpolated SOC for color (same logic as text)
+        let interpolatedSOC = currentStep?.soc || 0;
+        if (currentStep && prevStep && simulationTime && currentStep.destination.time && prevStep.destination.time) {
+          const stepStartTime = prevStep.destination.time;
+          const stepEndTime = currentStep.destination.time;
+          const currentTime = simulationTime;
+          const stepTotalDuration = stepEndTime.diff(stepStartTime);
+          const stepElapsed = currentTime.diff(stepStartTime);
+          const stepProgress = Math.max(0, Math.min(1, stepElapsed / stepTotalDuration));
+          const startSOC = prevStep.soc;
+          const endSOC = currentStep.soc;
+          interpolatedSOC = startSOC + (endSOC - startSOC) * stepProgress;
+        }
+        
+        // Calculate smooth color gradient based on SOC
+        const calculateSOCColor = (soc: number): [number, number, number, number] => {
+          // Clamp SOC between 0 and 100
+          const clampedSOC = Math.max(0, Math.min(100, soc));
+          
+          if (clampedSOC <= 50) {
+            // Red (0%) to Yellow (50%)
+            const ratio = clampedSOC / 50;
+            const red = 255;
+            const green = Math.round(255 * ratio);
+            const blue = 0;
+            return [red, green, blue, 255];
+          } else {
+            // Yellow (50%) to Green (100%)
+            const ratio = (clampedSOC - 50) / 50;
+            const red = Math.round(255 * (1 - ratio));
+            const green = 255;
+            const blue = 0;
+            return [red, green, blue, 255];
+          }
+        };
+        
+        // Override colors for special step types
+        if (currentStep?.type === "cdc") {
+          // Bright pulsing green for charging - but still show gradient
+          return [0, 255, 50, 255]; // Bright green with slight blue tint for charging
+        } else if (currentStep?.type === "stop") {
+          // Dim the normal color for stop
+          return calculateSOCColor(interpolatedSOC).map((c, i) => i === 3 ? 180 : c) as [number, number, number, number]; // Same color but more transparent
+        } else {
+          return calculateSOCColor(interpolatedSOC);
+        }
+      },
+      fontFamily: "system-ui, -apple-system, sans-serif",
+      fontWeight: "bold",
+      billboard: true,
+      getTextAnchor: "start",
+      getAlignmentBaseline: "center",
+      background: true,
+      getBackgroundColor: [0, 0, 0, 120], // Semi-transparent black background
+      backgroundPadding: [2, 1, 2, 1] // [left, top, right, bottom] padding in pixels
+    }),
   ];
 
   const vehiclesImportInputButtonRef = useRef<HTMLInputElement | null>(null);
   const stepsImportInputButtonRef = useRef<HTMLInputElement | null>(null);
+  const placesImportInputButtonRef = useRef<HTMLInputElement | null>(null);
 
   const handleStepsImport = useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1076,6 +1452,70 @@ const SimulatorBasic = ({
             console.log("vechicleData", csvData);
           } catch (error) {
             console.error(`Error reading file ${file.name}:`, error);
+          }
+        }
+
+        window.location.reload();
+      }
+      // Reset the input value so the same file can be uploaded again
+      if (event.target) {
+        event.target.value = "";
+      }
+    },
+    [],
+  );
+
+  const handlePlacesImport = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const files = event.target.files;
+
+      console.log("uploaded charging places files", files);
+
+      if (files) {
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+
+          try {
+            const fileContent = await file.text();
+            console.log(`Processing charging places file: ${file.name}`);
+
+            const parsedCSV = Papa.parse(fileContent, {
+              header: true,
+              skipEmptyLines: true,
+            });
+            const csvData = parsedCSV.data as {
+              id: string;
+              name: string;
+              longitude: string;
+              latitude: string;
+              evse_type: string;
+              max_power_kw: string;
+              price_per_kwh: string;
+              operator: string;
+            }[];
+
+            const rawChargingPlacesFromCSV: ChargingPlace[] = csvData.map((row) => ({
+              id: parseInt(row.id),
+              name: row.name,
+              position: [parseFloat(row.longitude), parseFloat(row.latitude)],
+              evse_type: row.evse_type as any,
+              max_power_kw: parseFloat(row.max_power_kw),
+              price_per_kwh: row.price_per_kwh ? parseFloat(row.price_per_kwh) : undefined,
+              operator: row.operator || undefined,
+            }));
+
+            setChargingPlaces(rawChargingPlacesFromCSV);
+            chargingPlacesRef.current = rawChargingPlacesFromCSV;
+            
+            localforage
+              .setItem("chargingPlaces", JSON.stringify(rawChargingPlacesFromCSV))
+              .then(() => {
+                console.log("Charging places saved to local storage");
+              });
+
+            setLatestRefreshDatetime(dayjs());
+          } catch (error) {
+            console.error(`Error processing file ${file.name}:`, error);
           }
         }
 
@@ -1218,24 +1658,61 @@ const SimulatorBasic = ({
           <h3>Click on the map to place vehicle initial position</h3>
         )}
 
-        {/* Update New Vehicle Init Time */}
+        {/* Update New Vehicle Init Time or Add Step */}
         {appStep === "updateNewVehicleInitTime" && (
           <div className="flex flex-row gap-2 items-center">
-            <h3>Vehicle intialisation time</h3>
-            <DatePicker
-              dateFormat={`yyyy-MM-dd h:mm`}
-              placeholderText="Input initialisation time"
-              selected={selectedVehicle?.steps[0].destination.time?.toDate()}
-              onChange={(date) => {
-                updateNewVehicleInitTime(dayjs(date));
-              }}
-              timeIntervals={1}
-              showTimeSelect
-              className="py-1 px-2 text-xs"
-              calendarClassName=""
-            />
+            <h3>
+              {tempStep.type === "trip" 
+                ? "Vehicle initialisation time" 
+                : tempStep.type === "cdc" 
+                ? `Add CDC step for vehicle ${selectedVehicle?.id}` 
+                : tempStep.type === "stop" 
+                ? `Add Stop step for vehicle ${selectedVehicle?.id}` 
+                : "Vehicle initialisation time"
+              }
+            </h3>
+            
+            {/* Show DatePicker only for initial vehicle setup */}
+            {tempStep.type === "trip" && (
+              <DatePicker
+                dateFormat={`yyyy-MM-dd h:mm`}
+                placeholderText="Input initialisation time"
+                selected={selectedVehicle?.steps[0].destination.time?.toDate()}
+                onChange={(date) => {
+                  updateNewVehicleInitTime(dayjs(date));
+                }}
+                timeIntervals={1}
+                showTimeSelect
+                className="py-1 px-2 text-xs"
+                calendarClassName=""
+              />
+            )}
+            
+            {/* Show Time Delta input for CDC/STOP steps */}
+            {(tempStep.type === "cdc" || tempStep.type === "stop") && (
+              <>
+                <input
+                  value={tempStepTimeDelta}
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      updateTempStepTimeDelta(Number(e.target.value));
+                    }
+                  }}
+                  className={tailwindStyles.input.basic}
+                  type="number"
+                  placeholder="Time delta (minutes)"
+                />
+                <span className="text-xs">minutes</span>
+              </>
+            )}
+            
             <button
               onClick={() => {
+                if (tempStep.type === "cdc" || tempStep.type === "stop") {
+                  // Save CDC/STOP step
+                  addVehicleSteps();
+                  setTempStep(resetStep);
+                }
                 setAppStep("normal");
               }}
               className={`${tailwindStyles.button.basic} bg-lime-400`}
@@ -1328,11 +1805,17 @@ const SimulatorBasic = ({
 
                 <button
                   onClick={() => {
-                    localforage.clear().then(() => {
-                      setVehicles([]);
-                    });
+                    if (window.confirm("⚠️ DELETE ALL DATA?\n\nThis will clear all vehicles and charging places.\nThis action cannot be undone!")) {
+                      localforage.clear().then(() => {
+                        setVehicles([]);
+                        setChargingPlaces([]);
+                        chargingPlacesRef.current = [];
+                        console.log("All data cleared from local storage");
+                        setLatestRefreshDatetime(dayjs());
+                      });
+                    }
                   }}
-                  className={`${tailwindStyles.button.basic}`}
+                  className={`flex flex-row py-1 px-2 gap-2 bg-red-200 hover:bg-red-300 rounded items-center text-xs justify-center`}
                 >
                   <FaTrash />
                 </button>
@@ -1376,6 +1859,14 @@ const SimulatorBasic = ({
                 >
                   <FaUpload /> Import Steps
                 </button>
+                <button
+                  onClick={() => {
+                    placesImportInputButtonRef.current?.click();
+                  }}
+                  className={`${tailwindStyles.button.basic}`}
+                >
+                  <FaUpload /> Import Places
+                </button>
                 <input
                   type="file"
                   accept=".csv"
@@ -1388,6 +1879,13 @@ const SimulatorBasic = ({
                   className="hidden"
                   ref={stepsImportInputButtonRef}
                   onChange={handleStepsImport}
+                />
+                <input
+                  type="file"
+                  accept=".csv"
+                  className="hidden"
+                  ref={placesImportInputButtonRef}
+                  onChange={handlePlacesImport}
                 />
               </div>
             </div>
@@ -1475,6 +1973,15 @@ const SimulatorBasic = ({
                         <button
                           onClick={() => {
                             selectVehicleByIndex(i);
+                            setTempStep({
+                              ...resetStep,
+                              type: "cdc",
+                              destination: {
+                                position: d.steps[d.steps.length - 1].destination.position,
+                              },
+                              routes: [d.steps[d.steps.length - 1].destination.position],
+                            });
+                            setAppStep("updateNewVehicleInitTime");
                           }}
                           className={`${tailwindStyles.button.basic} rounded-none gap-1 text-xs`}
                         >
@@ -1483,6 +1990,15 @@ const SimulatorBasic = ({
                         <button
                           onClick={() => {
                             selectVehicleByIndex(i);
+                            setTempStep({
+                              ...resetStep,
+                              type: "stop",
+                              destination: {
+                                position: d.steps[d.steps.length - 1].destination.position,
+                              },
+                              routes: [d.steps[d.steps.length - 1].destination.position],
+                            });
+                            setAppStep("updateNewVehicleInitTime");
                           }}
                           className={`${tailwindStyles.button.basic} rounded-none gap-1 text-xs`}
                         >
@@ -1510,15 +2026,27 @@ const SimulatorBasic = ({
                         });
                       }
 
+                      const currentStepIndex = getCurrentStepIndex(d);
+                      const isCurrentStep = currentStepIndex === i2;
+
                       return (
                         <div
-                          className="flex gap-2 justify-between text-xs flex-row"
+                          className={`flex gap-2 justify-between text-xs flex-row p-1 rounded ${
+                            isCurrentStep 
+                              ? "bg-lime-200 border-2 border-lime-400 font-bold" 
+                              : "hover:bg-slate-50"
+                          }`}
                           key={`vehicle-${i}-step-${i2}`}
                         >
                           <span>{i + 1}</span>
-                          <span>{d2.type}</span>
+                          <span className={`${isCurrentStep ? "text-lime-700" : ""}`}>
+                            {d2.type}
+                          </span>
                           <span>{d2.destination.time?.format("HH:mm")}</span>
                           <span>{totalDistance.toFixed(4)} km</span>
+                          {isCurrentStep && (
+                            <span className="text-lime-600 text-xs">● ACTIVE</span>
+                          )}
                         </div>
                       );
                     })}
