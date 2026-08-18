@@ -37,4 +37,5 @@ This project has been realised by the University of Melbourne.
 
 - Adel Ntoosi - Project manager
 - Loïc Merret - Project developper
+- Muhammad Insan Al-Amin - Project developer
 
